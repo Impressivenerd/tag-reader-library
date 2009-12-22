@@ -8,14 +8,19 @@ namespace MP3Headers
     {
         static void Main(string[] args)
         {
-            MP3Header mp3 = new MP3Header();
-            mp3.ReadMP3Information("Sample.mp3");
+            MP3Header mp3_cbr = new MP3Header();
+            mp3_cbr.ReadMP3Information("Sample CBR.mp3");
+
+            MP3Header mp3_vbr = new MP3Header();
+            mp3_vbr.ReadMP3Information("Sample VBR.mp3");
 
             Console.Write("MP3Headers Demo\n\n");
 
-            Console.WriteLine("Reading file: " + mp3.strFileName);
-            Console.WriteLine("Frequency: " + mp3.intFrequency.ToString());
-            Console.WriteLine("Bitrate: " + mp3.intBitRate.ToString());
+            Console.WriteLine(mp3_cbr.ToString());
+
+            Console.WriteLine();
+
+            Console.WriteLine(mp3_vbr.ToString());
 
             Console.Write("\n\nPress any key to continue...");
             Console.ReadKey();

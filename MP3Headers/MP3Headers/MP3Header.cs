@@ -28,21 +28,40 @@ namespace MP3Headers
         // Public variables for storing the information about the MP3
         public int intBitRate;
         public string strFileName;
+
+        /// <summary>
+        /// The size of the MP3 we are currently opening (in bytes).
+        /// </summary>
         public long lngFileSize;
         public int intFrequency;
+
+        /// <summary>
+        /// The stereo mode of the song.
+        /// </summary>
         public string strMode;
+
+        /// <summary>
+        /// Length of song (in seconds).
+        /// </summary>
         public int intLength;
+
+        /// <summary>
+        /// Length of song (formatted in hh:mm:ss).
+        /// </summary>
         public string strLengthFormatted;
 
         // Private variables used in the process of reading in the MP3 files
         private ulong bithdr;
         private bool boolVBitRate;
         private int intVFrames;
+        
+        //Jeff
         private int padding;
 
         public bool ReadMP3Information(string FileName)
         {
             FileStream fs = new FileStream(FileName, FileMode.Open, FileAccess.Read);
+
             // Set the filename not including the path information
             strFileName = @fs.Name;
             char[] chrSeparators = new char[]{'\\','/'};
@@ -62,9 +81,9 @@ namespace MP3Headers
             
             // Keep reading 4 bytes from the header until we know for sure that in 
             // fact it's an MP3
-            bool valid = false;
-            int frameSize = 0;
-            int nextFrame = 0;
+            bool valid = false; //Jeff - Determine if the MP3 is valid
+            int frameSize = 0;  //Jeff - Size of the MPEG frame
+            int nextFrame = 0;  //Jeff - Location in stream to next Frame (current position + framesize)
             do
             {
                 fs.Position = intPos;
@@ -143,6 +162,7 @@ namespace MP3Headers
             return false;
         }
 
+        //Jeff
         private bool quickHeaderCheck(byte[] c)
         {
             //Make sure Frame Sync is 11111111 111 and bitrate IS NOT 1111
@@ -156,6 +176,7 @@ namespace MP3Headers
             return false;
         }
 
+        //Jeff
         private bool headerChecks(byte[] pHeader)
         {
 	        // get MPEG version [bit 11,12]
@@ -181,6 +202,7 @@ namespace MP3Headers
             return true;
         }
 
+        //Jeff
         private int getPaddingQuick(byte[] pHeader)
         {
             return (int)((pHeader[2] >> 1) & 1);
@@ -236,6 +258,7 @@ namespace MP3Headers
                     ((getEmphasisIndex()  &    3)!=   2)    );
         }
 
+        //Jeff
         public bool IsVBR()
         {
             return this.boolVBitRate;
@@ -357,6 +380,10 @@ namespace MP3Headers
             return table[getVersionIndex(), getFrequencyIndex()];
         }
 
+        /// <summary>
+        /// Determine which output mode the song will be played in (Stereo, Join Stereo, Dual Channel, Single Channel).
+        /// </summary>
+        /// <returns>string</returns>
         private string getMode() 
         {
             switch(getModeIndex()) 
@@ -379,6 +406,10 @@ namespace MP3Headers
             return (int)(intKiloBitFileSize/getBitrate());
         }
 
+        /// <summary>
+        /// Output the length of the song in HH:MM:SS format.
+        /// </summary>
+        /// <returns>The formatted length (in HH:MM:SS).</returns>
         private string getFormattedLength() 
         {
             // Complete number of seconds
@@ -400,6 +431,10 @@ namespace MP3Headers
             return h.ToString("D2") + ":" + mm.ToString("D2") + ":" + ss.ToString("D2");
         }
 
+        /// <summary>
+        /// Retrieve the number of MPEG frames from the MP3.
+        /// </summary>
+        /// <returns>The number of MPEG frames.</returns>
         private int getNumberOfFrames() 
         {
             // Again, the number of MPEG frames is dependant on whether it's a variable bitrate MP3 or not
@@ -411,5 +446,19 @@ namespace MP3Headers
             else 
                 return intVFrames;
         }
+
+        //Jeff
+        public override string ToString()
+        {
+            return "Reading file: " + this.strFileName + "\n" +
+                "Frequency: " + this.intFrequency.ToString() + "\n" +
+                "Bitrate: " + this.intBitRate.ToString() + "\n" + 
+                "Is this VBR Encoded? : " + this.IsVBR().ToString() + "\n" +
+                "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
+                "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
+                String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
+                "Output Mode: " + this.strMode;
+        }
+
     }
 }
