@@ -56,8 +56,11 @@ public class MP3Header
     //Jeff
     private int padding;
 
-    private bool id3v1; //Temporarily to determine if id3v1 is present
-    private bool id3v2; //Temporarily to determine if id3v2 is present
+    //private bool id3v1; //Temporarily to determine if id3v1 is present
+    //private bool id3v2; //Temporarily to determine if id3v2 is present
+
+    private ID3v1 id3v1;
+    private ID3v2 id3v2;
 
     public bool ReadMP3Information(string FileName)
     {
@@ -87,11 +90,17 @@ public class MP3Header
         int nextFrame = 0;  //Jeff - Location in stream to next Frame (current position + framesize)
 
         //Read if id3v1 exists
-        getID3v1(fs);
+        id3v1 = getID3v1(fs);
 
         //Read if id3v2 exists
-        getID3v2(fs);
-        
+        id3v2 = getID3v2(fs);
+
+        //Pass up the ID3v2 tag (if it exists)
+        if (id3v2.Exists)
+        {
+            intPos = (int)id3v2.TagSize;
+        }
+
         do
         {
             fs.Position = intPos;
@@ -437,7 +446,20 @@ public class MP3Header
          * curFileSize = curFileSize - 116376 - 128; //For ID3v1
          */
 
-        long intKiloBitFileSize = (long)((8 * lngFileSize) / 1000);
+        long curFileSize = lngFileSize;
+
+        if (id3v1.Exists)
+        {
+            //ID3v1 Tag size is 128 bytes
+            curFileSize -= (long)id3v1.TagSize;
+        }
+
+        if (id3v2.Exists)
+        {
+            curFileSize -= (long)id3v2.TagSize;
+        }
+
+        long intKiloBitFileSize = (long)((8 * curFileSize) / 1000);
         return (int) Math.Round( intKiloBitFileSize / (float)getBitrate() );
     }
 
@@ -482,7 +504,7 @@ public class MP3Header
             return intVFrames;
     }
 
-    private void getID3v1(FileStream fs)
+    private ID3v1 getID3v1(FileStream fs)
     {
         byte[] bytHeaderTAG = new byte[128];
         fs.Position = fs.Length - 128;
@@ -541,20 +563,22 @@ public class MP3Header
             //Exists
             tag.Exists = true;
 
-            Console.WriteLine("Title: " + tag.Title);
-            Console.WriteLine("Artist: " + tag.Artist);
-            Console.WriteLine("Album: " + tag.Album);
-            Console.WriteLine("Year: " + tag.Year);
-            Console.WriteLine("Comment: " + tag.Comment);
-            Console.WriteLine("Track: {0:00}", tag.Track);
-            Console.WriteLine("GenreID: " + tag.GenreID.ToString());
-            Console.WriteLine("Genre: " + tag.Genre);
+            //Console.WriteLine("Title: " + tag.Title);
+            //Console.WriteLine("Artist: " + tag.Artist);
+            //Console.WriteLine("Album: " + tag.Album);
+            //Console.WriteLine("Year: " + tag.Year);
+            //Console.WriteLine("Comment: " + tag.Comment);
+            //Console.WriteLine("Track: {0:00}", tag.Track);
+            //Console.WriteLine("GenreID: " + tag.GenreID.ToString());
+            //Console.WriteLine("Genre: " + tag.Genre);
 
-            id3v1 = true;
+            return tag;
         }
+
+        return new ID3v1();
     }
 
-    private void getID3v2(FileStream fs)
+    private ID3v2 getID3v2(FileStream fs)
     {
         byte[] bytHeaderID3 = new byte[10];
         fs.Position = 0;
@@ -567,19 +591,81 @@ public class MP3Header
             tag.MajorVersion = (bytHeaderID3[3] != 0xFF) ? (int)bytHeaderID3[3] : 0;
             tag.MinorVersion = (bytHeaderID3[4] != 0xFF) ? (int)bytHeaderID3[4] : 0;
 
+            //Byte 5 should be binary like so: abcd0000
+            tag.UnsyncBit = ((bytHeaderID3[5] & 0x80) == 0x80);
+            tag.ExtendedHeader = ((bytHeaderID3[5] & 0x40) == 0x40);
+            tag.Experimental = ((bytHeaderID3[5] & 0x20) == 0x20);
+            tag.Footer = ((bytHeaderID3[5] & 0x10) == 0x10);
+
             /*
              * ID3v2 Uses synchsafe integers, which skip the largest bit (farthest left) of each byte.
              * 
              * See http://www.id3.org/id3v2.4.0-structure and http://id3lib.sourceforge.net/id3/id3v2.3.0.html#sec3.1
              */
-            Console.WriteLine("ID3v2.{0:D}.{1:D} Exists", tag.MajorVersion, tag.MinorVersion);
-            
+            //Console.WriteLine("ID3v2.{0:D}.{1:D} Exists", tag.MajorVersion, tag.MinorVersion);
+
+
+            //Max size for tag size = 2^28 = 268435456 bytes = 256MB; int.MaxValue = 2147483647 bytes = 2048MB
+            tag.TagSize = (int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
+
             //Console.WriteLine("Len (Bytes): {0:D}", (ulong)( (bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9] ));
             //Console.WriteLine("NUMBER: {0:D}", (ulong)( (0x00<<21) | (0x00<<14) | (0x02<<7) | (0x01) ));
             //Console.WriteLine("OUTPUT: {0:X}, {1:X}, {2:X}, {3:X}", bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]);
 
-            id3v2 = true;
+            tag.Exists = true;
+
+            //ID3v2.2.X uses 3 letter identifiers versus the 4 letter identifiers in 2.3.X and 2.4.X
+            if (tag.MajorVersion > 2)
+            {
+                Console.WriteLine("ID3v2.{0:D} Detected...", tag.MajorVersion);
+                fs.Position = 10;
+                while (fs.Position <= tag.TagSize + 10) //+10 for original header
+                {
+                    byte[] TempHeader = new byte[10];
+                    fs.Read(TempHeader, 0, 10);
+
+                    if (TempHeader[0] == 0x00 || TempHeader[1] == 0x00 || TempHeader[2] == 0x00 || TempHeader[3] == 0x00)
+                    {
+                        //Nothing Here - Backtrack
+                        fs.Position = fs.Position - 9;
+                    }
+                    else
+                    {
+                        Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
+
+                        //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
+                        bool unsync = false;
+
+                        if (tag.MajorVersion > 3)
+                        {
+                            unsync = ((TempHeader[9] & 0x02) == 0x02);
+                        }
+
+                        int FrameSize = 0;
+                        if (!unsync && tag.MajorVersion > 3)
+                        {
+                            FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
+                        }
+                        else
+                        {
+                            FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
+                        }
+
+                        //Skip Frame Header and Frame Data
+                        fs.Position = fs.Position + FrameSize;
+                    }
+                }
+                Console.WriteLine();
+            }
+            else
+            {
+                Console.WriteLine("ID3v2.2 Not Supported. Skipping...");
+            }
+
+            return tag;
         }
+
+        return new ID3v2();
     }
 
     //Jeff
@@ -592,57 +678,34 @@ public class MP3Header
             "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
             "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
             String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
-            "ID3v1: " + this.id3v1.ToString() + "\n" + 
-            "ID3v2: " + this.id3v2.ToString() + "\n" +
+            "ID3v1: " + this.id3v1.Exists.ToString() + "\n" + 
+            "ID3v2: " + this.id3v2.Exists.ToString() + "\n" +
             "Output Mode: " + this.strMode;
     }
 
 }
 
-public class ID3v2
-{
-    public int MajorVersion;
-    public int MinorVersion;
-
-    public ID3v2()
-    {
-        MajorVersion = 0;
-        MinorVersion = 0;
-    }
-}
-
-public class ID3v1
+public class ID3
 {
     public string Title;
     public string Artist;
     public string Album;
     public string Year;
     public string Comment;
-    public string Genre; //Name of Genre
-    public int Track; //ID3v1.1 Spec
-    public int GenreID; //ID of Genre
+    public string Genre;
+    public int Track;
+    public int GenreID;
     public bool Exists;
+    public int TagSize;
 
-    public const int TAG_SIZE = 128;
-
-    public ID3v1()
+    public static int syncsafe(byte byt1, byte byt2, byte byt3, byte byt4)
     {
-        Title = "";
-        Artist = "";
-        Album = "";
-        Year = "";
-        Comment = "";
-        Genre = "";
-
-        Track = 0;
-        GenreID = 0;
-
-        Exists = false;
+        return (int)((byt1 << 21) | (byt2 << 14) | (byt3 << 7) | byt4);
     }
 
     public string getGenre(int genreID)
     {
-        switch(genreID)
+        switch (genreID)
         {
             case 0:
                 return "Blues";
@@ -712,195 +775,239 @@ public class ID3v1
                 return "Classical";
             case 33:
                 return "Instrumental";
-            case 34: 
-                return "Acid"; 
+            case 34:
+                return "Acid";
             case 35:
-                return "House"; 
+                return "House";
             case 36:
-                return "Game"; 
+                return "Game";
             case 37:
-                return "Sound Clip"; 
+                return "Sound Clip";
             case 38:
-                return "Gospel"; 
+                return "Gospel";
             case 39:
-                return "Noise"; 
+                return "Noise";
             case 40:
-                return "AlternRock"; 
+                return "AlternRock";
             case 41:
-                return "Bass"; 
+                return "Bass";
             case 42:
-                return "Soul"; 
+                return "Soul";
             case 43:
-                return "Punk"; 
+                return "Punk";
             case 44:
-                return "Space"; 
+                return "Space";
             case 45:
-                return "Meditative"; 
+                return "Meditative";
             case 46:
-                return "Instrumental Pop"; 
+                return "Instrumental Pop";
             case 47:
-                return "Instrumental Rock"; 
+                return "Instrumental Rock";
             case 48:
-                return "Ethnic"; 
+                return "Ethnic";
             case 49:
-                return "Gothic"; 
+                return "Gothic";
             case 50:
-                return "Darkwave"; 
+                return "Darkwave";
             case 51:
-                return "Techno-Industrial"; 
+                return "Techno-Industrial";
             case 52:
-                return "Electronic"; 
+                return "Electronic";
             case 53:
-                return "Pop-Folk"; 
+                return "Pop-Folk";
             case 54:
-                return "Eurodance"; 
+                return "Eurodance";
             case 55:
-                return "Dream"; 
+                return "Dream";
             case 56:
-                return "Southern Rock"; 
+                return "Southern Rock";
             case 57:
-                return "Comedy"; 
+                return "Comedy";
             case 58:
-                return "Cult"; 
+                return "Cult";
             case 59:
-                return "Gangsta"; 
+                return "Gangsta";
             case 60:
-                return "Top 40"; 
+                return "Top 40";
             case 61:
-                return "Christian Rap"; 
+                return "Christian Rap";
             case 62:
-                return "Pop/Funk"; 
+                return "Pop/Funk";
             case 63:
-                return "Jungle"; 
+                return "Jungle";
             case 64:
-                return "Native American"; 
+                return "Native American";
             case 65:
-                return "Cabaret"; 
+                return "Cabaret";
             case 66:
-                return "New Wave"; 
+                return "New Wave";
             case 67:
-                return "Psychadelic"; 
+                return "Psychadelic";
             case 68:
-                return "Rave"; 
+                return "Rave";
             case 69:
-                return "Showtunes"; 
+                return "Showtunes";
             case 70:
-                return "Trailer"; 
+                return "Trailer";
             case 71:
-                return "Lo-Fi"; 
+                return "Lo-Fi";
             case 72:
-                return "Tribal"; 
+                return "Tribal";
             case 73:
-                return "Acid Punk"; 
+                return "Acid Punk";
             case 74:
-                return "Acid Jazz"; 
+                return "Acid Jazz";
             case 75:
-                return "Polka"; 
+                return "Polka";
             case 76:
                 return "Retro";
             case 77:
                 return "Musical";
             case 78:
-                return "Rock & Roll"; 
+                return "Rock & Roll";
             case 79:
                 return "Hard Rock";
-            
+
             //Begin WinAmp expanded codes
-            case 80: 
+            case 80:
                 return "Folk";
-            case 81: 
+            case 81:
                 return "Folk-Rock";
-            case 82: 
+            case 82:
                 return "National Folk";
-            case 83: 
+            case 83:
                 return "Swing";
-            case 84: 
+            case 84:
                 return "Fast Fusion";
-            case 85: 
+            case 85:
                 return "Bebob";
-            case 86: 
+            case 86:
                 return "Latin";
-            case 87: 
+            case 87:
                 return "Revival";
-            case 88: 
+            case 88:
                 return "Celtic";
-            case 89: 
+            case 89:
                 return "Bluegrass";
-            case 90: 
+            case 90:
                 return "Avantgarde";
-            case 91: 
+            case 91:
                 return "Gothic Rock";
-            case 92: 
+            case 92:
                 return "Progressive Rock";
-            case 93: 
+            case 93:
                 return "Psychedelic Rock";
-            case 94: 
+            case 94:
                 return "Symphonic Rock";
-            case 95: 
+            case 95:
                 return "Slow Rock";
-            case 96: 
+            case 96:
                 return "Big Band";
-            case 97: 
+            case 97:
                 return "Chorus";
-            case 98: 
+            case 98:
                 return "Easy Listening";
-            case 99: 
+            case 99:
                 return "Acoustic";
-            case 100: 
+            case 100:
                 return "Humour";
-            case 101: 
+            case 101:
                 return "Speech";
-            case 102: 
+            case 102:
                 return "Chanson";
-            case 103: 
+            case 103:
                 return "Opera";
-            case 104: 
+            case 104:
                 return "Chamber Music";
-            case 105: 
+            case 105:
                 return "Sonata";
-            case 106: 
+            case 106:
                 return "Symphony";
-            case 107: 
+            case 107:
                 return "Booty Brass";
-            case 108: 
+            case 108:
                 return "Primus";
-            case 109: 
+            case 109:
                 return "Porn Groove";
-            case 110: 
+            case 110:
                 return "Satire";
-            case 111: 
+            case 111:
                 return "Slow Jam";
-            case 112: 
+            case 112:
                 return "Club";
-            case 113: 
+            case 113:
                 return "Tango";
-            case 114: 
+            case 114:
                 return "Samba";
-            case 115: 
+            case 115:
                 return "Folklore";
-            case 116: 
+            case 116:
                 return "Ballad";
-            case 117: 
+            case 117:
                 return "Poweer Ballad";
-            case 118: 
+            case 118:
                 return "Rhytmic Soul";
-            case 119: 
+            case 119:
                 return "Freestyle";
-            case 120: 
+            case 120:
                 return "Duet";
-            case 121: 
+            case 121:
                 return "Punk Rock";
-            case 122: 
+            case 122:
                 return "Drum Solo";
-            case 123: 
+            case 123:
                 return "A Capela";
-            case 124: 
+            case 124:
                 return "Euro-House";
-            case 125: 
+            case 125:
                 return "Dance Hall";
-            
+
             default:
                 return "Unknown";
         }
+    }
+}
+
+public class ID3v2 : ID3
+{
+    public int MajorVersion;
+    public int MinorVersion;
+
+    public bool UnsyncBit;
+    public bool ExtendedHeader;
+    public bool Experimental;
+    public bool Footer;
+
+    public ID3v2()
+    {
+        MajorVersion = 0;
+        MinorVersion = 0;
+        Exists = false;
+        TagSize = 0;
+
+        UnsyncBit = false;
+        ExtendedHeader = false;
+        Experimental = false;
+        Footer = false;
+    }
+}
+
+public class ID3v1 : ID3
+{
+    public ID3v1()
+    {
+        Title = "";
+        Artist = "";
+        Album = "";
+        Year = "";
+        Comment = "";
+        Genre = "";
+
+        Track = 0;
+        GenreID = 0;
+
+        Exists = false;
+
+        TagSize = 128;
     }
 }
