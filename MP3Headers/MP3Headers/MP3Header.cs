@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 
 /* ----------------------------------------------------------
 
@@ -90,7 +91,7 @@ public class MP3Header
         int nextFrame = 0;  //Jeff - Location in stream to next Frame (current position + framesize)
 
         //Read if id3v1 exists
-        id3v1 = getID3v1(fs);
+        id3v1 = new ID3v1(fs);
 
         //Read if id3v2 exists
         id3v2 = getID3v2(fs);
@@ -504,98 +505,29 @@ public class MP3Header
             return intVFrames;
     }
 
-    private ID3v1 getID3v1(FileStream fs)
-    {
-        byte[] bytHeaderTAG = new byte[128];
-        fs.Position = fs.Length - 128;
-        fs.Read(bytHeaderTAG, 0, 128);
-
-        if ((char)bytHeaderTAG[0] == 'T' && (char)bytHeaderTAG[1] == 'A' && (char)bytHeaderTAG[2] == 'G')
-        {
-            ID3v1 tag = new ID3v1();
-
-            //Title
-            for (int i = 3; i <= 32; ++i)
-            {
-                tag.Title += (char)bytHeaderTAG[i];
-            }
-
-            //Artist
-            for (int i = 33; i <= 62; ++i)
-            {
-                tag.Artist += (char)bytHeaderTAG[i];
-            }
-
-            //Album
-            for (int i = 63; i <= 92; ++i)
-            {
-                tag.Album += (char)bytHeaderTAG[i];
-            }
-
-            //Year
-            for (int i = 93; i <= 96; ++i)
-            {
-                tag.Year += (char)bytHeaderTAG[i];
-            }
-
-            //Comment
-            for(int i = 97; i <= 125; ++i)
-            {
-                tag.Comment += (char)bytHeaderTAG[i];
-            }
-
-            //Track
-            if ((bytHeaderTAG[125] == 0x00 || bytHeaderTAG[125] == 0x20) && bytHeaderTAG[126] != 0x00)
-            {
-                tag.Track = (int)bytHeaderTAG[126];
-            }
-            else
-            {
-                tag.Comment += (char)bytHeaderTAG[126];
-            }
-
-            //GenreID
-            tag.GenreID = (int)bytHeaderTAG[127];
-
-            //Genre
-            tag.Genre = tag.getGenre(tag.GenreID);
-
-            //Exists
-            tag.Exists = true;
-
-            //Console.WriteLine("Title: " + tag.Title);
-            //Console.WriteLine("Artist: " + tag.Artist);
-            //Console.WriteLine("Album: " + tag.Album);
-            //Console.WriteLine("Year: " + tag.Year);
-            //Console.WriteLine("Comment: " + tag.Comment);
-            //Console.WriteLine("Track: {0:00}", tag.Track);
-            //Console.WriteLine("GenreID: " + tag.GenreID.ToString());
-            //Console.WriteLine("Genre: " + tag.Genre);
-
-            return tag;
-        }
-
-        return new ID3v1();
-    }
-
     private ID3v2 getID3v2(FileStream fs)
     {
+        //Store FileStreams current position
+        long fsOriginalPosition = fs.Position;
+
         byte[] bytHeaderID3 = new byte[10];
         fs.Position = 0;
         fs.Read(bytHeaderID3, 0, 10);
 
-        if (bytHeaderID3[0] == 0x49 && bytHeaderID3[1] == 0x44 && bytHeaderID3[2] == 0x33)
+        //ID3v2.X should start with "ID3"
+        if((char)bytHeaderID3[0] == 'I' && (char)bytHeaderID3[1] == 'D' && (char)bytHeaderID3[2] == '3')
         {
             ID3v2 tag = new ID3v2();
 
+            //Major and Minor Versions should NOT be 0xFF
             tag.MajorVersion = (bytHeaderID3[3] != 0xFF) ? (int)bytHeaderID3[3] : 0;
             tag.MinorVersion = (bytHeaderID3[4] != 0xFF) ? (int)bytHeaderID3[4] : 0;
 
             //Byte 5 should be binary like so: abcd0000
-            tag.UnsyncBit = ((bytHeaderID3[5] & 0x80) == 0x80);
-            tag.ExtendedHeader = ((bytHeaderID3[5] & 0x40) == 0x40);
+            tag.AllFramesUnsynced = ((bytHeaderID3[5] & 0x80) == 0x80);
+            tag.ExtendedHeaderExists = ((bytHeaderID3[5] & 0x40) == 0x40);
             tag.Experimental = ((bytHeaderID3[5] & 0x20) == 0x20);
-            tag.Footer = ((bytHeaderID3[5] & 0x10) == 0x10);
+            tag.FooterExists = ((bytHeaderID3[5] & 0x10) == 0x10);
 
             /*
              * ID3v2 Uses synchsafe integers, which skip the largest bit (farthest left) of each byte.
@@ -606,7 +538,7 @@ public class MP3Header
 
 
             //Max size for tag size = 2^28 = 268435456 bytes = 256MB; int.MaxValue = 2147483647 bytes = 2048MB
-            tag.TagSize = (int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
+            tag.TagSize = ID3.syncsafe(bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]); //(int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
 
             //Console.WriteLine("Len (Bytes): {0:D}", (ulong)( (bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9] ));
             //Console.WriteLine("NUMBER: {0:D}", (ulong)( (0x00<<21) | (0x00<<14) | (0x02<<7) | (0x01) ));
@@ -619,7 +551,7 @@ public class MP3Header
             {
                 Console.WriteLine("ID3v2.{0:D} Detected...", tag.MajorVersion);
                 fs.Position = 10;
-                while (fs.Position <= tag.TagSize + 10) //+10 for original header
+                while (fs.Position <= tag.TagSize + 10) //(tag.TagSize + 10) == End Position (+10 for Original Header, +20 For Original Header and Footer [if present])
                 {
                     byte[] TempHeader = new byte[10];
                     fs.Read(TempHeader, 0, 10);
@@ -632,6 +564,13 @@ public class MP3Header
                     else
                     {
                         Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
+
+                        string FrameHeaderName = ((char)TempHeader[0]).ToString() + 
+                            ((char)TempHeader[1]).ToString() + 
+                            ((char)TempHeader[2]).ToString() + 
+                            ((char)TempHeader[3]).ToString();
+                        
+                        tag.Frames.Add(FrameHeaderName, new ID3v2Frame(FrameHeaderName));
 
                         //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
                         bool unsync = false;
@@ -662,8 +601,12 @@ public class MP3Header
                 Console.WriteLine("ID3v2.2 Not Supported. Skipping...");
             }
 
+            fs.Position = fsOriginalPosition;
+
             return tag;
         }
+
+        fs.Position = fsOriginalPosition;
 
         return new ID3v2();
     }
@@ -684,6 +627,8 @@ public class MP3Header
     }
 
 }
+
+#region ID3 Tag Information
 
 public class ID3
 {
@@ -970,13 +915,24 @@ public class ID3
 
 public class ID3v2 : ID3
 {
+    //Version Information
     public int MajorVersion;
     public int MinorVersion;
 
-    public bool UnsyncBit;
-    public bool ExtendedHeader;
+    public bool AllFramesUnsynced;
+
+    /*****
+     * Extended Header Options
+     *****/
+    public bool ExtendedHeaderExists;
+    public bool EH_TagIsUpdate;
+    public bool EH_CRCPresent;
+    public bool EH_TagRestrictions;
+
     public bool Experimental;
-    public bool Footer;
+    public bool FooterExists;
+
+    public Dictionary<string, ID3v2Frame> Frames;
 
     public ID3v2()
     {
@@ -985,10 +941,32 @@ public class ID3v2 : ID3
         Exists = false;
         TagSize = 0;
 
-        UnsyncBit = false;
-        ExtendedHeader = false;
+        AllFramesUnsynced = false;
+        
+        ExtendedHeaderExists = false;
+        EH_TagIsUpdate = false;
+        EH_CRCPresent = false;
+        EH_TagRestrictions = false;
+
         Experimental = false;
-        Footer = false;
+        FooterExists = false;
+
+        Frames = new Dictionary<string, ID3v2Frame>();
+    }
+}
+
+public class ID3v2Frame
+{
+    public string FrameName;
+
+    public ID3v2Frame()
+    {
+        FrameName = "";
+    }
+
+    public ID3v2Frame(string frameName)
+    {
+        FrameName = frameName;
     }
 }
 
@@ -1010,4 +988,89 @@ public class ID3v1 : ID3
 
         TagSize = 128;
     }
+
+    public ID3v1(FileStream fs)
+    {
+        /************
+         * Defaults
+         ************/
+        Title = "";
+        Artist = "";
+        Album = "";
+        Year = "";
+        Comment = "";
+        Genre = "";
+
+        Track = 0;
+        GenreID = 0;
+        Exists = false;
+        TagSize = 128;
+
+        //Store FileStreams current position
+        long fsOriginalPosition = fs.Position;
+
+        //Start Parsing for ID3v1 Tag
+        byte[] bytHeaderTAG = new byte[128];
+        fs.Position = fs.Length - 128;
+        fs.Read(bytHeaderTAG, 0, 128);
+
+        //ID3v1.X Should begin with "TAG"
+        if ((char)bytHeaderTAG[0] == 'T' && (char)bytHeaderTAG[1] == 'A' && (char)bytHeaderTAG[2] == 'G')
+        {
+            //Title
+            for (int i = 3; i <= 32; ++i)
+            {
+                Title += (char)bytHeaderTAG[i];
+            }
+
+            //Artist
+            for (int i = 33; i <= 62; ++i)
+            {
+                Artist += (char)bytHeaderTAG[i];
+            }
+
+            //Album
+            for (int i = 63; i <= 92; ++i)
+            {
+                Album += (char)bytHeaderTAG[i];
+            }
+
+            //Year
+            for (int i = 93; i <= 96; ++i)
+            {
+                Year += (char)bytHeaderTAG[i];
+            }
+
+            //Comment
+            for (int i = 97; i <= 125; ++i)
+            {
+                Comment += (char)bytHeaderTAG[i];
+            }
+
+            //Track or End of Comment
+            if ((bytHeaderTAG[125] == 0x00 || bytHeaderTAG[125] == 0x20) && bytHeaderTAG[126] != 0x00)
+            {
+                //ID3v1.1
+                Track = (int)bytHeaderTAG[126];
+            }
+            else
+            {
+                //ID3v1.0
+                Comment += (char)bytHeaderTAG[126];
+            }
+
+            //GenreID
+            GenreID = (int)bytHeaderTAG[127];
+
+            //Genre
+            Genre = getGenre(GenreID);
+
+            //Exists
+            Exists = true;
+        }
+
+        fs.Position = fsOriginalPosition;
+    }
 }
+
+#endregion
