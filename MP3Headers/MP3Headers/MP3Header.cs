@@ -571,6 +571,8 @@ public class MP3Header
                             ((char)TempHeader[3]).ToString();
                         
                         tag.Frames.Add(FrameHeaderName, new ID3v2Frame(FrameHeaderName));
+                        
+                        tag.Frames[FrameHeaderName].getFrameFlags(TempHeader[8], TempHeader[9]);
 
                         //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
                         bool unsync = false;
@@ -580,18 +582,17 @@ public class MP3Header
                             unsync = ((TempHeader[9] & 0x02) == 0x02);
                         }
 
-                        int FrameSize = 0;
                         if (!unsync && tag.MajorVersion > 3)
                         {
-                            FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
+                            tag.Frames[FrameHeaderName].FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
                         }
                         else
                         {
-                            FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
+                            tag.Frames[FrameHeaderName].FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
                         }
 
                         //Skip Frame Header and Frame Data
-                        fs.Position = fs.Position + FrameSize;
+                        fs.Position = fs.Position + tag.Frames[FrameHeaderName].FrameSize;
                     }
                 }
                 Console.WriteLine();
@@ -958,15 +959,45 @@ public class ID3v2 : ID3
 public class ID3v2Frame
 {
     public string FrameName;
+    public int FrameSize;
+
+    //Frame Status Flags [Byte 9/10]
+    public bool FS_TagAlterPreserve; //a
+    public bool FS_FileAlterPreserve; //b
+    public bool FS_ReadOnly; //c
+
+    //Frame Format Flags [Byte 10/10]
+    public bool FF_GroupingIdentity; //h
+    public bool FF_Compression; //k
+    public bool FF_Encryption; //m
+    public bool FF_Unsynchronisation; //n
+    public bool FF_DataLengthIndicator; //p
 
     public ID3v2Frame()
     {
         FrameName = "";
+        FrameSize = 0;
     }
 
     public ID3v2Frame(string frameName)
     {
         FrameName = frameName;
+        FrameSize = 0;
+    }
+
+    public void getFrameFlags(byte bytFrameFlag1, byte bytFrameFlag2)
+    {
+        //Frame Status, bytFrameFlag1, %0abc0000
+        FS_TagAlterPreserve = ((bytFrameFlag1 & 0x40) == 0x40);
+        FS_FileAlterPreserve = ((bytFrameFlag1 & 0x20) == 0x20);
+        FS_ReadOnly = ((bytFrameFlag1 & 0x10) == 0x10);
+
+        //Frame Format, bytFrameFlag2, %0h00kmnp
+        FF_GroupingIdentity = ((bytFrameFlag2 & 0x40) == 0x40);
+        FF_Compression = ((bytFrameFlag2 & 0x08) == 0x08);
+        FF_Encryption = ((bytFrameFlag2 & 0x04) == 0x04);
+        FF_Unsynchronisation = ((bytFrameFlag2 & 0x02) == 0x02);
+        FF_DataLengthIndicator = ((bytFrameFlag2 & 0x01) == 0x01);
     }
 }
 
