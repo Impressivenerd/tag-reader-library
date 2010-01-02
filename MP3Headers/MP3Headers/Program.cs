@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Collections;
 
 namespace MP3Headers
 {
@@ -19,8 +20,10 @@ namespace MP3Headers
 
             Console.Write("MP3Headers Demo\n\n");
 
-            Console.WriteLine(mp3_cbr.ToString());
+            Console.WriteLine(mp3_id324.ToString());
+            Console.WriteLine();
 
+            Console.WriteLine(mp3_cbr.ToString());
             Console.WriteLine();
 
             Console.WriteLine(mp3_vbr.ToString());

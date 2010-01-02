@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Text;
 
 /* ----------------------------------------------------------
 
@@ -94,7 +96,7 @@ public class MP3Header
         id3v1 = new ID3v1(fs);
 
         //Read if id3v2 exists
-        id3v2 = getID3v2(fs);
+        id3v2 = new ID3v2(fs);
 
         //Pass up the ID3v2 tag (if it exists)
         if (id3v2.Exists)
@@ -505,113 +507,6 @@ public class MP3Header
             return intVFrames;
     }
 
-    private ID3v2 getID3v2(FileStream fs)
-    {
-        //Store FileStreams current position
-        long fsOriginalPosition = fs.Position;
-
-        byte[] bytHeaderID3 = new byte[10];
-        fs.Position = 0;
-        fs.Read(bytHeaderID3, 0, 10);
-
-        //ID3v2.X should start with "ID3"
-        if((char)bytHeaderID3[0] == 'I' && (char)bytHeaderID3[1] == 'D' && (char)bytHeaderID3[2] == '3')
-        {
-            ID3v2 tag = new ID3v2();
-
-            //Major and Minor Versions should NOT be 0xFF
-            tag.MajorVersion = (bytHeaderID3[3] != 0xFF) ? (int)bytHeaderID3[3] : 0;
-            tag.MinorVersion = (bytHeaderID3[4] != 0xFF) ? (int)bytHeaderID3[4] : 0;
-
-            //Byte 5 should be binary like so: abcd0000
-            tag.AllFramesUnsynced = ((bytHeaderID3[5] & 0x80) == 0x80);
-            tag.ExtendedHeaderExists = ((bytHeaderID3[5] & 0x40) == 0x40);
-            tag.Experimental = ((bytHeaderID3[5] & 0x20) == 0x20);
-            tag.FooterExists = ((bytHeaderID3[5] & 0x10) == 0x10);
-
-            /*
-             * ID3v2 Uses synchsafe integers, which skip the largest bit (farthest left) of each byte.
-             * 
-             * See http://www.id3.org/id3v2.4.0-structure and http://id3lib.sourceforge.net/id3/id3v2.3.0.html#sec3.1
-             */
-            //Console.WriteLine("ID3v2.{0:D}.{1:D} Exists", tag.MajorVersion, tag.MinorVersion);
-
-
-            //Max size for tag size = 2^28 = 268435456 bytes = 256MB; int.MaxValue = 2147483647 bytes = 2048MB
-            tag.TagSize = ID3.syncsafe(bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]); //(int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
-
-            //Console.WriteLine("Len (Bytes): {0:D}", (ulong)( (bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9] ));
-            //Console.WriteLine("NUMBER: {0:D}", (ulong)( (0x00<<21) | (0x00<<14) | (0x02<<7) | (0x01) ));
-            //Console.WriteLine("OUTPUT: {0:X}, {1:X}, {2:X}, {3:X}", bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]);
-
-            tag.Exists = true;
-
-            //ID3v2.2.X uses 3 letter identifiers versus the 4 letter identifiers in 2.3.X and 2.4.X
-            if (tag.MajorVersion > 2)
-            {
-                Console.WriteLine("ID3v2.{0:D} Detected...", tag.MajorVersion);
-                fs.Position = 10;
-                while (fs.Position <= tag.TagSize + 10) //(tag.TagSize + 10) == End Position (+10 for Original Header, +20 For Original Header and Footer [if present])
-                {
-                    byte[] TempHeader = new byte[10];
-                    fs.Read(TempHeader, 0, 10);
-
-                    if (TempHeader[0] == 0x00 || TempHeader[1] == 0x00 || TempHeader[2] == 0x00 || TempHeader[3] == 0x00)
-                    {
-                        //Nothing Here - Backtrack
-                        fs.Position = fs.Position - 9;
-                    }
-                    else
-                    {
-                        Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
-
-                        string FrameHeaderName = ((char)TempHeader[0]).ToString() + 
-                            ((char)TempHeader[1]).ToString() + 
-                            ((char)TempHeader[2]).ToString() + 
-                            ((char)TempHeader[3]).ToString();
-                        
-                        tag.Frames.Add(FrameHeaderName, new ID3v2Frame(FrameHeaderName));
-                        
-                        tag.Frames[FrameHeaderName].getFrameFlags(TempHeader[8], TempHeader[9]);
-
-                        //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
-                        bool unsync = false;
-
-                        if (tag.MajorVersion > 3)
-                        {
-                            unsync = ((TempHeader[9] & 0x02) == 0x02);
-                        }
-
-                        if (!unsync && tag.MajorVersion > 3)
-                        {
-                            tag.Frames[FrameHeaderName].FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
-                        }
-                        else
-                        {
-                            tag.Frames[FrameHeaderName].FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
-                        }
-
-                        //Skip Frame Header and Frame Data
-                        fs.Position = fs.Position + tag.Frames[FrameHeaderName].FrameSize;
-                    }
-                }
-                Console.WriteLine();
-            }
-            else
-            {
-                Console.WriteLine("ID3v2.2 Not Supported. Skipping...");
-            }
-
-            fs.Position = fsOriginalPosition;
-
-            return tag;
-        }
-
-        fs.Position = fsOriginalPosition;
-
-        return new ID3v2();
-    }
-
     //Jeff
     public override string ToString()
     {
@@ -624,6 +519,7 @@ public class MP3Header
             String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
             "ID3v1: " + this.id3v1.Exists.ToString() + "\n" + 
             "ID3v2: " + this.id3v2.Exists.ToString() + "\n" +
+            "Title: " + id3v2.Title + "\n" +
             "Output Mode: " + this.strMode;
     }
 
@@ -932,10 +828,16 @@ public class ID3v2 : ID3
 
     public bool Experimental;
     public bool FooterExists;
+    public bool PaddingExists;
 
-    public Dictionary<string, ID3v2Frame> Frames;
+    public Dictionary<string, List<ID3v2Frame>> Frames;
 
     public ID3v2()
+    {
+        setDefaultValues();
+    }
+
+    private void setDefaultValues()
     {
         MajorVersion = 0;
         MinorVersion = 0;
@@ -943,16 +845,139 @@ public class ID3v2 : ID3
         TagSize = 0;
 
         AllFramesUnsynced = false;
-        
+
         ExtendedHeaderExists = false;
         EH_TagIsUpdate = false;
         EH_CRCPresent = false;
         EH_TagRestrictions = false;
 
         Experimental = false;
+        PaddingExists = false;
         FooterExists = false;
 
-        Frames = new Dictionary<string, ID3v2Frame>();
+        Frames = new Dictionary<string, List<ID3v2Frame>>();
+    }
+
+    public ID3v2(FileStream fs)
+    {
+        //Store FileStreams current position
+        long fsOriginalPosition = fs.Position;
+
+        setDefaultValues();
+
+        byte[] bytHeaderID3 = new byte[10];
+        fs.Position = 0;
+        fs.Read(bytHeaderID3, 0, 10);
+
+        //ID3v2.X should start with "ID3"
+        if ((char)bytHeaderID3[0] == 'I' && (char)bytHeaderID3[1] == 'D' && (char)bytHeaderID3[2] == '3')
+        {
+            //Major and Minor Versions should NOT be 0xFF
+            MajorVersion = (bytHeaderID3[3] != 0xFF) ? (int)bytHeaderID3[3] : 0;
+            MinorVersion = (bytHeaderID3[4] != 0xFF) ? (int)bytHeaderID3[4] : 0;
+
+            //Byte 5 should be binary like so: abcd0000
+            AllFramesUnsynced = ((bytHeaderID3[5] & 0x80) == 0x80);
+            ExtendedHeaderExists = ((bytHeaderID3[5] & 0x40) == 0x40);
+            Experimental = ((bytHeaderID3[5] & 0x20) == 0x20);
+            FooterExists = ((bytHeaderID3[5] & 0x10) == 0x10);
+
+            /*
+             * ID3v2 Uses synchsafe integers, which skip the largest bit (farthest left) of each byte.
+             * 
+             * See http://www.id3.org/id3v2.4.0-structure and http://id3lib.sourceforge.net/id3/id3v2.3.0.html#sec3.1
+             */
+            //Console.WriteLine("ID3v2.{0:D}.{1:D} Exists", tag.MajorVersion, tag.MinorVersion);
+
+
+            //Max size for tag size = 2^28 = 268435456 bytes = 256MB; int.MaxValue = 2147483647 bytes = 2048MB
+            TagSize = ID3.syncsafe(bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]); //(int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
+
+            //Console.WriteLine("Len (Bytes): {0:D}", (ulong)( (bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9] ));
+            //Console.WriteLine("NUMBER: {0:D}", (ulong)( (0x00<<21) | (0x00<<14) | (0x02<<7) | (0x01) ));
+            //Console.WriteLine("OUTPUT: {0:X}, {1:X}, {2:X}, {3:X}", bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]);
+
+            Exists = true;
+
+            //ID3v2.2.X uses 3 letter identifiers versus the 4 letter identifiers in 2.3.X and 2.4.X
+            if (MajorVersion > 2)
+            {
+                Console.WriteLine("ID3v2.{0:D} Detected...", MajorVersion);
+                fs.Position = 10;
+                while (!PaddingExists && fs.Position <= TagSize + 10) //(tag.TagSize + 10) == End Position (+10 for Original Header, +20 For Original Header and Footer [if present])
+                {
+                    byte[] TempHeader = new byte[10];
+                    fs.Read(TempHeader, 0, 10);
+
+                    if (!FooterExists && TempHeader[0] == 0x00 || TempHeader[1] == 0x00 || TempHeader[2] == 0x00 || TempHeader[3] == 0x00)
+                    {
+                        //Nothing Here but Padding; Skip to the end of the tag
+                        //Footer and Padding are Mutually Exclusive
+                        PaddingExists = true;
+                    }
+                    else
+                    {
+                        Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
+
+                        string FrameHeaderName = ((char)TempHeader[0]).ToString() +
+                            ((char)TempHeader[1]).ToString() +
+                            ((char)TempHeader[2]).ToString() +
+                            ((char)TempHeader[3]).ToString();
+
+                        int currentWorkingIndex = 0;
+
+                        if (Frames.ContainsKey(FrameHeaderName))
+                        {
+                            Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName));
+                        }
+                        else
+                        {
+                            List<ID3v2Frame> FrameList = new List<ID3v2Frame>();
+                            FrameList.Add(new ID3v2Frame(FrameHeaderName));
+                            Frames.Add(FrameHeaderName, FrameList);
+                        }
+
+                        currentWorkingIndex = Frames[FrameHeaderName].Count - 1;
+
+                        Frames[FrameHeaderName][currentWorkingIndex].getFrameFlags(TempHeader[8], TempHeader[9]);
+
+                        //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
+                        bool unsync = false;
+
+                        if (MajorVersion > 3)
+                        {
+                            unsync = ((TempHeader[9] & 0x02) == 0x02);
+                        }
+
+                        if (!unsync && MajorVersion > 3)
+                        {
+                            Frames[FrameHeaderName][currentWorkingIndex].FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
+                        }
+                        else
+                        {
+                            Frames[FrameHeaderName][currentWorkingIndex].FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
+                        }
+
+                        //Set FrameData
+                        byte[] tempData = new byte[Frames[FrameHeaderName][currentWorkingIndex].FrameSize];
+                        fs.Read(tempData, 0, Frames[FrameHeaderName][currentWorkingIndex].FrameSize);
+                        Frames[FrameHeaderName][currentWorkingIndex].getFrameData(tempData);
+                    }
+                }
+                Console.WriteLine();
+            }
+            else
+            {
+                Console.WriteLine("ID3v2.2 Not Supported. Skipping...");
+            }
+        }
+
+        if (Frames.ContainsKey("TIT2"))
+        {
+            Title = (string)Frames["TIT2"][0].Data;
+        }
+
+        fs.Position = fsOriginalPosition;
     }
 }
 
@@ -960,6 +985,8 @@ public class ID3v2Frame
 {
     public string FrameName;
     public int FrameSize;
+    public byte[] FrameData;
+    public object Data;
 
     //Frame Status Flags [Byte 9/10]
     public bool FS_TagAlterPreserve; //a
@@ -999,6 +1026,106 @@ public class ID3v2Frame
         FF_Unsynchronisation = ((bytFrameFlag2 & 0x02) == 0x02);
         FF_DataLengthIndicator = ((bytFrameFlag2 & 0x01) == 0x01);
     }
+
+    public void getFrameData(byte[] data)
+    {
+        if (this.FrameSize != 0)
+        {
+            FrameData = data;
+            testGetData();
+        }
+    }
+
+    public void testGetData()
+    {
+        //T-Type Frame (Text)
+        if (FrameName.ToCharArray()[0] == 'T' && FrameName != "TXXX")
+        {
+            bool useBOM = false; //BOM = Unicode Byte Order Mark
+            System.Text.Encoding enc  = Encoding.ASCII;
+            switch (FrameData[0])
+            {
+                case 0x00:
+                    //ISO-8859-1 [ISO-8859-1]. Terminated with $00.
+                    enc = Encoding.GetEncoding("ISO-8859-1");
+                    break;
+                case 0x01: 
+                    //UTF-16 [UTF-16] encoded Unicode [UNICODE] with BOM. All
+                    //strings in the same frame SHALL have the same byteorder.
+                    //Terminated with $00 00.
+                    //enc = Encoding.GetEncoding("UTF-16");
+                    useBOM = true;
+                    break;
+                case 0x02: 
+                    //UTF-16BE [UTF-16] encoded Unicode [UNICODE] without BOM.
+                    //Terminated with $00 00.
+                    enc = Encoding.GetEncoding("UTF-16BE");
+                    break;
+                case 0x03:
+                    //UTF-8 [UTF-8] encoded Unicode [UNICODE]. Terminated with $00.
+                    enc = Encoding.GetEncoding("UTF-8");
+                    break;
+            }
+
+            if (FrameData.Length > 1)
+            {
+                if (!useBOM)
+                {
+                    Data = enc.GetString(FrameData, 1, FrameData.Length - 1);
+                }
+                else
+                {
+                    Encoding[] UnicodeEncodings = { Encoding.BigEndianUnicode, Encoding.Unicode, Encoding.UTF8 };
+                    for (int i = 0; enc == Encoding.ASCII && i < UnicodeEncodings.Length; ++i)
+                    {
+                        bool PreambleEqual = true;
+                        byte[] Preamble = UnicodeEncodings[i].GetPreamble();
+
+                        for (int j = 0; PreambleEqual && j < Preamble.Length; ++j)
+                        {
+                            PreambleEqual = Preamble[j] == FrameData[j + 1];
+                        }
+
+                        if (PreambleEqual)
+                        {
+                            enc = UnicodeEncodings[i];
+                        }
+                    }
+
+                    Data = enc.GetString(FrameData, 1 + enc.GetPreamble().Length, FrameData.Length - (1 + enc.GetPreamble().Length));
+                }
+            }
+            else
+            {
+                //No Frame Data, so blank.
+                Console.WriteLine("The Frame Above Had No Data");
+                Data = "";
+            }
+        }
+        else if (FrameName == "TXXX")
+        {
+            //TXXX Frame Goes Here (TODO)
+        }
+
+        //W-Type Frame (TODO: Needs more testing)
+        if (FrameName.ToCharArray()[0] == 'W' && FrameName != "WXXX")
+        {
+            Encoding enc = Encoding.ASCII;
+            Data = enc.GetString(FrameData, 0, FrameData.Length);
+        }
+        else if (FrameName == "WXXX")
+        {
+            //WXXX is always ISO-8859-1 Encoded
+            Encoding enc = Encoding.GetEncoding("ISO-8859-1");
+            Data = enc.GetString(FrameData, 0, FrameData.Length);
+        }
+    }
+}
+
+public struct ID3v2CustomFrame
+{
+    public string Description;
+    public string Value;
 }
 
 public class ID3v1 : ID3
