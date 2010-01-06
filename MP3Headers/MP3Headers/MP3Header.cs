@@ -3,6 +3,9 @@ using System.IO;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Text;
+using System.Collections;
+using System.Drawing;
+using System.Drawing.Imaging;
 
 /* ----------------------------------------------------------
 
@@ -510,17 +513,40 @@ public class MP3Header
     //Jeff
     public override string ToString()
     {
-        return "Reading file: " + this.strFileName + "\n" +
+        string info =
+            "Reading file: " + this.strFileName + "\n" +
             "Frequency: " + this.intFrequency.ToString() + "\n" +
-            "Bitrate: " + this.intBitRate.ToString() + "\n" + 
+            "Bitrate: " + this.intBitRate.ToString() + "\n" +
             "Is this VBR Encoded? : " + this.IsVBR().ToString() + "\n" +
             "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
             "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
             String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
-            "ID3v1: " + this.id3v1.Exists.ToString() + "\n" + 
-            "ID3v2: " + this.id3v2.Exists.ToString() + "\n" +
-            "Title: " + id3v2.Title + "\n" +
-            "Output Mode: " + this.strMode;
+            "Output Mode: " + this.strMode + "\n";
+
+        info += "[ID3v1]\n";
+        if (id3v1.Exists)
+        {
+            info += "Title: " + id3v1.Title + "\n";
+            info += "Artist: " + id3v1.Artist + "\n";
+            info += "Album: " + id3v1.Album + "\n";
+        }
+        else
+        {
+            info += "ID3v1 Does Not Exist\n";
+        }
+
+        info += "[ID3v2]\n";
+        if (id3v2.Exists)
+        {
+            info += "ID3v2 Version: ID3v2." + id3v2.MajorVersion.ToString() + "." + id3v2.MinorVersion.ToString() + "\n";
+            info += "Title: " + id3v2.Title + "\n";
+        }
+        else
+        {
+            info += "ID3v2 Does Not Exist\n";
+        }
+
+        return info;
     }
 
 }
@@ -543,6 +569,36 @@ public class ID3
     public static int syncsafe(byte byt1, byte byt2, byte byt3, byte byt4)
     {
         return (int)((byt1 << 21) | (byt2 << 14) | (byt3 << 7) | byt4);
+    }
+
+    public static byte[] UnSync(byte[] bytArray)
+    {
+        List<byte> newArray = new List<byte>();
+
+        for (int i = 0; i < bytArray.Length; ++i)
+        {
+            if (bytArray.Length - i >= 3)
+            {
+                if (bytArray[i] == 0xFF && bytArray[i + 1] == 0x00 && bytArray[i + 2] == 0x00)
+                {
+                    //Only Add 0xFF and 0x00 back to the array
+                    newArray.Add(bytArray[i]);
+                    newArray.Add(bytArray[i + 1]);
+                    i = i + 2; //++i will add one more
+                }
+                else
+                {
+                    newArray.Add(bytArray[i]);
+                }
+            }
+            else
+            {
+                newArray.Add(bytArray[i]);
+            }
+        }
+
+        byte[] t = newArray.ToArray();
+        return t;
     }
 
     public string getGenre(int genreID)
@@ -839,10 +895,11 @@ public class ID3v2 : ID3
 
     private void setDefaultValues()
     {
-        MajorVersion = 0;
-        MinorVersion = 0;
         Exists = false;
         TagSize = 0;
+        
+        MajorVersion = 0;
+        MinorVersion = 0;
 
         AllFramesUnsynced = false;
 
@@ -852,10 +909,38 @@ public class ID3v2 : ID3
         EH_TagRestrictions = false;
 
         Experimental = false;
-        PaddingExists = false;
         FooterExists = false;
+        PaddingExists = false;
 
         Frames = new Dictionary<string, List<ID3v2Frame>>();
+    }
+
+    private void ProcessFlags(byte bytFlags)
+    {
+        switch (MajorVersion)
+        {
+            case 2:
+                //ID3v2.2 Flag defined: ab000000
+                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);    //a - Unsynchronisation
+                //Compression = ((bytFlags & 0x40) == 0x40);        //b - Compression (if set, skip the entire tag)
+                break;
+            case 3:
+                //ID3v2.3 Flag defined: abc00000
+                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);    //a - Unsynchronisation
+                ExtendedHeaderExists = ((bytFlags & 0x40) == 0x40); //b - Extended Header
+                Experimental = ((bytFlags & 0x20) == 0x20);         //c - Experimental Indicator
+                break;
+            case 4:
+                //ID3v2.4 Flag defined: abcd0000
+                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);     //a - Unsynchronisation
+                ExtendedHeaderExists = ((bytFlags & 0x40) == 0x40);  //b - Extended Header
+                Experimental = ((bytFlags & 0x20) == 0x20);          //c - Experimental Indicator
+                FooterExists = ((bytFlags & 0x10) == 0x10);          //d - Footer Present
+                break;
+            default:
+                //Unknown - All Flags False
+                break;
+        }
     }
 
     public ID3v2(FileStream fs)
@@ -876,11 +961,7 @@ public class ID3v2 : ID3
             MajorVersion = (bytHeaderID3[3] != 0xFF) ? (int)bytHeaderID3[3] : 0;
             MinorVersion = (bytHeaderID3[4] != 0xFF) ? (int)bytHeaderID3[4] : 0;
 
-            //Byte 5 should be binary like so: abcd0000
-            AllFramesUnsynced = ((bytHeaderID3[5] & 0x80) == 0x80);
-            ExtendedHeaderExists = ((bytHeaderID3[5] & 0x40) == 0x40);
-            Experimental = ((bytHeaderID3[5] & 0x20) == 0x20);
-            FooterExists = ((bytHeaderID3[5] & 0x10) == 0x10);
+            ProcessFlags(bytHeaderID3[5]);
 
             /*
              * ID3v2 Uses synchsafe integers, which skip the largest bit (farthest left) of each byte.
@@ -902,14 +983,22 @@ public class ID3v2 : ID3
             //ID3v2.2.X uses 3 letter identifiers versus the 4 letter identifiers in 2.3.X and 2.4.X
             if (MajorVersion > 2)
             {
+                /*fs.Position = 0;
+                byte[] tag = new byte[TagSize + 10];
+                fs.Read(tag, 0, TagSize + 10);
+                FileStream fff = File.OpenWrite("C:\\Temp.dat");
+                fff.Write(tag, 0, tag.Length);
+                fff.Close();*/
+
                 Console.WriteLine("ID3v2.{0:D} Detected...", MajorVersion);
                 fs.Position = 10;
+                int totalFrameSize = 0;
                 while (!PaddingExists && fs.Position <= TagSize + 10) //(tag.TagSize + 10) == End Position (+10 for Original Header, +20 For Original Header and Footer [if present])
                 {
                     byte[] TempHeader = new byte[10];
                     fs.Read(TempHeader, 0, 10);
 
-                    if (!FooterExists && TempHeader[0] == 0x00 || TempHeader[1] == 0x00 || TempHeader[2] == 0x00 || TempHeader[3] == 0x00)
+                    if (!FooterExists && (TempHeader[0] == 0x00 && TempHeader[1] == 0x00 && TempHeader[2] == 0x00 && TempHeader[3] == 0x00))
                     {
                         //Nothing Here but Padding; Skip to the end of the tag
                         //Footer and Padding are Mutually Exclusive
@@ -919,11 +1008,13 @@ public class ID3v2 : ID3
                     {
                         Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
 
+                        //Get the Frame Name
                         string FrameHeaderName = ((char)TempHeader[0]).ToString() +
                             ((char)TempHeader[1]).ToString() +
                             ((char)TempHeader[2]).ToString() +
                             ((char)TempHeader[3]).ToString();
 
+                        //Keep Track of which count of the Frame we are working on (some frames may be in the tag more than once)
                         int currentWorkingIndex = 0;
 
                         if (Frames.ContainsKey(FrameHeaderName))
@@ -948,8 +1039,12 @@ public class ID3v2 : ID3
                         {
                             unsync = ((TempHeader[9] & 0x02) == 0x02);
                         }
+                        if (AllFramesUnsynced)
+                        {
+                            unsync = true;
+                        }
 
-                        if (!unsync && MajorVersion > 3)
+                        if (unsync && MajorVersion > 3)
                         {
                             Frames[FrameHeaderName][currentWorkingIndex].FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
                         }
@@ -958,12 +1053,15 @@ public class ID3v2 : ID3
                             Frames[FrameHeaderName][currentWorkingIndex].FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
                         }
 
+                        totalFrameSize += Frames[FrameHeaderName][currentWorkingIndex].FrameSize;
+
                         //Set FrameData
                         byte[] tempData = new byte[Frames[FrameHeaderName][currentWorkingIndex].FrameSize];
                         fs.Read(tempData, 0, Frames[FrameHeaderName][currentWorkingIndex].FrameSize);
                         Frames[FrameHeaderName][currentWorkingIndex].getFrameData(tempData);
                     }
                 }
+                Console.WriteLine("TagSize: {0:D}, TotalFrameSize: {1:D}", TagSize, totalFrameSize);
                 Console.WriteLine();
             }
             else
@@ -972,12 +1070,29 @@ public class ID3v2 : ID3
             }
         }
 
+        ProcessFrames();
+
+        fs.Position = fsOriginalPosition;
+    }
+
+    private void ProcessFrames()
+    {
+        //Set the Title
         if (Frames.ContainsKey("TIT2"))
         {
             Title = (string)Frames["TIT2"][0].Data;
         }
+        else if (Frames.ContainsKey("TT2"))
+        {
+            Title = (string)Frames["TT2"][0].Data;
+        }
 
-        fs.Position = fsOriginalPosition;
+        //Picture Example
+        if (Frames.ContainsKey("APIC"))
+        {
+            Type t = Frames["APIC"][0].Data.GetType();
+            //((ID3v2APICFrame)Frames["APIC"][0].Data).Picture.Save("C:\\" + this.Title + ".jpg");
+        }
     }
 }
 
@@ -1032,67 +1147,81 @@ public class ID3v2Frame
         if (this.FrameSize != 0)
         {
             FrameData = data;
-            testGetData();
+            ProcessFrame();
         }
     }
 
-    public void testGetData()
+    //Assigns enc through reference, and returns a bool if we are using Byte Order Marks
+    private bool GetEncodingType(ref Encoding enc)
+    {
+        bool useBOM = false; //BOM = Unicode Byte Order Mark
+        
+        //System.Text.Encoding enc = null;
+        switch (FrameData[0])
+        {
+            case 0x00:
+                //ISO-8859-1 [ISO-8859-1]. Terminated with $00.
+                enc = Encoding.GetEncoding("ISO-8859-1");
+                break;
+            case 0x01:
+                //UTF-16 [UTF-16] encoded Unicode [UNICODE] with BOM. All
+                //strings in the same frame SHALL have the same byteorder.
+                //Terminated with $00 00.
+                //enc = Encoding.GetEncoding("UTF-16");
+                useBOM = true;
+                break;
+            case 0x02:
+                //UTF-16BE [UTF-16] encoded Unicode [UNICODE] without BOM.
+                //Terminated with $00 00.
+                enc = Encoding.GetEncoding("UTF-16BE");
+                break;
+            case 0x03:
+                //UTF-8 [UTF-8] encoded Unicode [UNICODE]. Terminated with $00.
+                enc = Encoding.GetEncoding("UTF-8");
+                break;
+        }
+
+        if (useBOM)
+        {
+            Encoding[] UnicodeEncodings = { Encoding.BigEndianUnicode, Encoding.Unicode, Encoding.UTF8 };
+
+            for (int i = 0; enc == null && i < UnicodeEncodings.Length; ++i)
+            {
+                bool PreambleEqual = true;
+                byte[] Preamble = UnicodeEncodings[i].GetPreamble();
+
+                for (int j = 0; PreambleEqual && j < Preamble.Length; ++j)
+                {
+                    PreambleEqual = Preamble[j] == FrameData[j+1]; //+1 = Skip Text Encoding Byte
+                }
+
+                if (PreambleEqual)
+                {
+                    enc = UnicodeEncodings[i];
+                }
+            }
+        }
+
+        return useBOM;
+    }
+
+    public void ProcessFrame()
     {
         //T-Type Frame (Text)
         if (FrameName.ToCharArray()[0] == 'T' && FrameName != "TXXX")
         {
-            bool useBOM = false; //BOM = Unicode Byte Order Mark
-            System.Text.Encoding enc  = Encoding.ASCII;
-            switch (FrameData[0])
-            {
-                case 0x00:
-                    //ISO-8859-1 [ISO-8859-1]. Terminated with $00.
-                    enc = Encoding.GetEncoding("ISO-8859-1");
-                    break;
-                case 0x01: 
-                    //UTF-16 [UTF-16] encoded Unicode [UNICODE] with BOM. All
-                    //strings in the same frame SHALL have the same byteorder.
-                    //Terminated with $00 00.
-                    //enc = Encoding.GetEncoding("UTF-16");
-                    useBOM = true;
-                    break;
-                case 0x02: 
-                    //UTF-16BE [UTF-16] encoded Unicode [UNICODE] without BOM.
-                    //Terminated with $00 00.
-                    enc = Encoding.GetEncoding("UTF-16BE");
-                    break;
-                case 0x03:
-                    //UTF-8 [UTF-8] encoded Unicode [UNICODE]. Terminated with $00.
-                    enc = Encoding.GetEncoding("UTF-8");
-                    break;
-            }
-
             if (FrameData.Length > 1)
             {
-                if (!useBOM)
+                System.Text.Encoding enc = null;
+                bool useBOM = GetEncodingType(ref enc);
+
+                if (useBOM)
                 {
-                    Data = enc.GetString(FrameData, 1, FrameData.Length - 1);
+                    Data = enc.GetString(FrameData, 1 + enc.GetPreamble().Length, FrameData.Length - (1 + enc.GetPreamble().Length));
                 }
                 else
                 {
-                    Encoding[] UnicodeEncodings = { Encoding.BigEndianUnicode, Encoding.Unicode, Encoding.UTF8 };
-                    for (int i = 0; enc == Encoding.ASCII && i < UnicodeEncodings.Length; ++i)
-                    {
-                        bool PreambleEqual = true;
-                        byte[] Preamble = UnicodeEncodings[i].GetPreamble();
-
-                        for (int j = 0; PreambleEqual && j < Preamble.Length; ++j)
-                        {
-                            PreambleEqual = Preamble[j] == FrameData[j + 1];
-                        }
-
-                        if (PreambleEqual)
-                        {
-                            enc = UnicodeEncodings[i];
-                        }
-                    }
-
-                    Data = enc.GetString(FrameData, 1 + enc.GetPreamble().Length, FrameData.Length - (1 + enc.GetPreamble().Length));
+                    Data = enc.GetString(FrameData, 1, FrameData.Length - 1);
                 }
             }
             else
@@ -1119,6 +1248,113 @@ public class ID3v2Frame
             Encoding enc = Encoding.GetEncoding("ISO-8859-1");
             Data = enc.GetString(FrameData, 0, FrameData.Length);
         }
+
+        if (FrameName == "APIC")
+        {
+            /*
+   This frame contains a picture directly related to the audio file.
+   Image format is the MIME type and subtype [MIME] for the image. In
+   the event that the MIME media type name is omitted, "image/" will be
+   implied. The "image/png" [PNG] or "image/jpeg" [JFIF] picture format
+   should be used when interoperability is wanted. Description is a
+   short description of the picture, represented as a terminated
+   text string. There may be several pictures attached to one file, each
+   in their individual "APIC" frame, but only one with the same content
+   descriptor. There may only be one picture with the picture type
+   declared as picture type $01 and $02 respectively. There is the
+   possibility to put only a link to the image file by using the 'MIME
+   type' "-->" and having a complete URL [URL] instead of picture data.
+   The use of linked files should however be used sparingly since there
+   is the risk of separation of files.
+
+     <Header for 'Attached picture', ID: "APIC">
+     Text encoding      $xx
+     MIME type          <text string> $00
+     Picture type       $xx
+     Description        <text string according to encoding> $00 (00)
+     Picture data       <binary data>
+
+
+   Picture type:  $00  Other
+                  $01  32x32 pixels 'file icon' (PNG only)
+                  $02  Other file icon
+                  $03  Cover (front)
+                  $04  Cover (back)
+                  $05  Leaflet page
+                  $06  Media (e.g. label side of CD)
+                  $07  Lead artist/lead performer/soloist
+                  $08  Artist/performer
+                  $09  Conductor
+                  $0A  Band/Orchestra
+                  $0B  Composer
+                  $0C  Lyricist/text writer
+                  $0D  Recording Location
+                  $0E  During recording
+                  $0F  During performance
+                  $10  Movie/video screen capture
+                  $11  A bright coloured fish
+                  $12  Illustration
+                  $13  Band/artist logotype
+                  $14  Publisher/Studio logotype
+             */
+            if (FrameData.Length > 1)
+            {
+                Encoding enc = null;
+                bool useBOM = GetEncodingType(ref enc);
+
+                if (useBOM)
+                {
+                    //Skip BOM
+                    Data = enc.GetString(FrameData, 1 + enc.GetPreamble().Length, FrameData.Length - (1 + enc.GetPreamble().Length));
+                }
+                else
+                {
+                    int DataPosition = 0;
+                    ID3v2APICFrame apic = new ID3v2APICFrame();
+
+                    //Skip just Text Encoding
+                    DataPosition++;
+
+                    //Get MimeType
+                    int BeginMimeType = DataPosition;
+                    while (FrameData[DataPosition] != 0x00)
+                    {
+                        DataPosition++;
+                    }
+                    apic.MIMEType = enc.GetString(FrameData, BeginMimeType, DataPosition - BeginMimeType);
+
+                    //Get ImageType
+                    DataPosition++;
+                    apic.ImageType = FrameData[DataPosition];
+
+                    //Get Description
+                    int BeginDescription = ++DataPosition;
+                    while (FrameData[DataPosition] != 0x00)
+                    {
+                        DataPosition++;
+                    }
+                    apic.Description = enc.GetString(FrameData, BeginDescription, DataPosition - BeginDescription);
+
+                    //Get Binary Data
+                    DataPosition++;
+                    if (FF_Unsynchronisation)
+                    {
+                        //Change FF0000 to FF00
+                        byte[] copiedArray = new byte[FrameData.Length - DataPosition];
+                        Array.Copy(FrameData, DataPosition, copiedArray, 0, FrameData.Length - DataPosition);
+                        MemoryStream a = new MemoryStream(ID3.UnSync(copiedArray), false);
+                        apic.Picture = Image.FromStream(a);
+                    }
+                    else
+                    {
+                        MemoryStream ms = new MemoryStream(FrameData, DataPosition, FrameData.Length - DataPosition);
+                        apic.Picture = Image.FromStream(ms);
+                    }
+
+                    Data = apic;
+                }
+            }
+        }
     }
 }
 
@@ -1126,6 +1362,64 @@ public struct ID3v2CustomFrame
 {
     public string Description;
     public string Value;
+}
+
+public class ID3v2APICFrame
+{
+    public string MIMEType;
+    public string Description;
+    public byte ImageType;
+    public Image Picture;
+
+    public string PictureType()
+    {
+        switch (ImageType)
+        {
+            default:
+            case 0x00:
+                return "Other";
+            case 0x01:
+                return "32x32 pixels 'file icon' (PNG only)";
+            case 0x02:
+                return "Other file icon";
+            case 0x03:
+                return "Cover (front)";
+            case 0x04:
+                return "Cover (back)";
+            case 0x05:
+                return "Leaflet page";
+            case 0x06:
+                return "Media (e.g. label side of CD)";
+            case 0x07:
+                return "Lead artist/lead performer/soloist";
+            case 0x08:
+                return "Artist/performer";
+            case 0x09:
+                return "Conductor";
+            case 0x0A:
+                return "Band/Orchestra";
+            case 0x0B:
+                return "Composer";
+            case 0x0C:
+                return "Lyricist/text writer";
+            case 0x0D:
+                return "Recording Location";
+            case 0x0E:
+                return "During recording";
+            case 0x0F:
+                return "During performance";
+            case 0x10:
+                return "Movie/video screen capture";
+            case 0x11:
+                return "A bright coloured fish";
+            case 0x12:
+                return "Illustration";
+            case 0x13:
+                return "Band/artist logotype";
+            case 0x14:
+                return "Publisher/Studio logotype";
+        }
+    }
 }
 
 public class ID3v1 : ID3
