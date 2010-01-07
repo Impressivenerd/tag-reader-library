@@ -540,6 +540,8 @@ public class MP3Header
         {
             info += "ID3v2 Version: ID3v2." + id3v2.MajorVersion.ToString() + "." + id3v2.MinorVersion.ToString() + "\n";
             info += "Title: " + id3v2.Title + "\n";
+            info += "Artist: " + id3v2.Artist + "\n";
+            info += "Album: " + id3v2.Album + "\n";
         }
         else
         {
@@ -873,6 +875,7 @@ public class ID3v2 : ID3
     public int MinorVersion;
 
     public bool AllFramesUnsynced;
+    public bool Compression; //ID3v2.2 ONLY
 
     /*****
      * Extended Header Options
@@ -902,6 +905,7 @@ public class ID3v2 : ID3
         MinorVersion = 0;
 
         AllFramesUnsynced = false;
+        Compression = false;
 
         ExtendedHeaderExists = false;
         EH_TagIsUpdate = false;
@@ -922,7 +926,7 @@ public class ID3v2 : ID3
             case 2:
                 //ID3v2.2 Flag defined: ab000000
                 AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);    //a - Unsynchronisation
-                //Compression = ((bytFlags & 0x40) == 0x40);        //b - Compression (if set, skip the entire tag)
+                Compression = ((bytFlags & 0x40) == 0x40);     //b - Compression (if set, skip the entire tag)
                 break;
             case 3:
                 //ID3v2.3 Flag defined: abc00000
@@ -981,92 +985,133 @@ public class ID3v2 : ID3
             Exists = true;
 
             //ID3v2.2.X uses 3 letter identifiers versus the 4 letter identifiers in 2.3.X and 2.4.X
-            if (MajorVersion > 2)
+            if (!Compression)
             {
-                /*fs.Position = 0;
-                byte[] tag = new byte[TagSize + 10];
-                fs.Read(tag, 0, TagSize + 10);
-                FileStream fff = File.OpenWrite("C:\\Temp.dat");
-                fff.Write(tag, 0, tag.Length);
-                fff.Close();*/
-
                 Console.WriteLine("ID3v2.{0:D} Detected...", MajorVersion);
                 fs.Position = 10;
                 int totalFrameSize = 0;
-                while (!PaddingExists && fs.Position <= TagSize + 10) //(tag.TagSize + 10) == End Position (+10 for Original Header, +20 For Original Header and Footer [if present])
-                {
-                    byte[] TempHeader = new byte[10];
-                    fs.Read(TempHeader, 0, 10);
 
-                    if (!FooterExists && (TempHeader[0] == 0x00 && TempHeader[1] == 0x00 && TempHeader[2] == 0x00 && TempHeader[3] == 0x00))
+                int AdditionalBytes = 10;
+                if (FooterExists)
+                {
+                    AdditionalBytes = 20;
+                }
+                while (!PaddingExists && fs.Position < TagSize + AdditionalBytes) //(tag.TagSize + 10) == End Position (+10 for Original Header, +20 For Original Header and Footer [if present])
+                {
+                    if (MajorVersion == 2)
                     {
-                        //Nothing Here but Padding; Skip to the end of the tag
-                        //Footer and Padding are Mutually Exclusive
-                        PaddingExists = true;
+                        byte[] TempHeader = new byte[6];
+                        fs.Read(TempHeader, 0, 6);
+
+                        if (TempHeader[0] == 0x00 && TempHeader[1] == 0x00 && TempHeader[2] == 0x00)
+                        {
+                            PaddingExists = true;
+                        }
+                        else
+                        {
+                            Console.WriteLine("HEADER[{0}{1}{2}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2]);
+
+                            string FrameHeaderName = ((char)TempHeader[0]).ToString() +
+                                ((char)TempHeader[1]).ToString() +
+                                ((char)TempHeader[2]).ToString();
+
+                            int currentWorkingIndex = 0;
+
+                            if (Frames.ContainsKey(FrameHeaderName))
+                            {
+                                Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName));
+                            }
+                            else
+                            {
+                                List<ID3v2Frame> FrameList = new List<ID3v2Frame>();
+                                FrameList.Add(new ID3v2Frame(FrameHeaderName));
+                                Frames.Add(FrameHeaderName, FrameList);
+                            }
+
+                            currentWorkingIndex = Frames[FrameHeaderName].Count - 1;
+
+                            //Frame Size
+                            Frames[FrameHeaderName][currentWorkingIndex].FrameSize = (int)((TempHeader[3] << 16) | (TempHeader[4] << 8) | (TempHeader[5]));
+
+                            totalFrameSize += Frames[FrameHeaderName][currentWorkingIndex].FrameSize;
+
+                            //Set FrameData
+                            byte[] tempData = new byte[Frames[FrameHeaderName][currentWorkingIndex].FrameSize];
+                            fs.Read(tempData, 0, Frames[FrameHeaderName][currentWorkingIndex].FrameSize);
+                            Frames[FrameHeaderName][currentWorkingIndex].getFrameData(tempData);
+                        }
                     }
                     else
                     {
-                        Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
 
-                        //Get the Frame Name
-                        string FrameHeaderName = ((char)TempHeader[0]).ToString() +
-                            ((char)TempHeader[1]).ToString() +
-                            ((char)TempHeader[2]).ToString() +
-                            ((char)TempHeader[3]).ToString();
+                        byte[] TempHeader = new byte[10];
+                        fs.Read(TempHeader, 0, 10);
 
-                        //Keep Track of which count of the Frame we are working on (some frames may be in the tag more than once)
-                        int currentWorkingIndex = 0;
-
-                        if (Frames.ContainsKey(FrameHeaderName))
+                        if (!FooterExists && (TempHeader[0] == 0x00 && TempHeader[1] == 0x00 && TempHeader[2] == 0x00 && TempHeader[3] == 0x00))
                         {
-                            Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName));
+                            //Nothing Here but Padding; Skip to the end of the tag
+                            //Footer and Padding are Mutually Exclusive
+                            PaddingExists = true;
                         }
                         else
                         {
-                            List<ID3v2Frame> FrameList = new List<ID3v2Frame>();
-                            FrameList.Add(new ID3v2Frame(FrameHeaderName));
-                            Frames.Add(FrameHeaderName, FrameList);
+                            Console.WriteLine("HEADER[{0}{1}{2}{3}]", (char)TempHeader[0], (char)TempHeader[1], (char)TempHeader[2], (char)TempHeader[3]);
+
+                            //Get the Frame Name
+                            string FrameHeaderName = ((char)TempHeader[0]).ToString() +
+                                ((char)TempHeader[1]).ToString() +
+                                ((char)TempHeader[2]).ToString() +
+                                ((char)TempHeader[3]).ToString();
+
+                            if (Frames.ContainsKey(FrameHeaderName))
+                            {
+                                Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName));
+                            }
+                            else
+                            {
+                                List<ID3v2Frame> FrameList = new List<ID3v2Frame>();
+                                FrameList.Add(new ID3v2Frame(FrameHeaderName));
+                                Frames.Add(FrameHeaderName, FrameList);
+                            }
+                            
+                            //Keep Track of which count of the Frame we are working on (some frames may be in the tag more than once)
+                            int currentFrameIndex = Frames[FrameHeaderName].Count - 1;
+                            ID3v2Frame currentFrame = Frames[FrameHeaderName][currentFrameIndex];
+
+                            currentFrame.getFrameFlags(TempHeader[8], TempHeader[9]);
+
+                            //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
+                            bool unsync = false;
+
+                            if (MajorVersion > 3)
+                            {
+                                unsync = ((TempHeader[9] & 0x02) == 0x02);
+                            }
+                            if (AllFramesUnsynced)
+                            {
+                                unsync = true;
+                            }
+
+                            if (unsync && MajorVersion > 3)
+                            {
+                                currentFrame.FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
+                            }
+                            else
+                            {
+                                currentFrame.FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
+                            }
+
+                            totalFrameSize += currentFrame.FrameSize;
+
+                            //Set FrameData
+                            byte[] tempData = new byte[currentFrame.FrameSize];
+                            fs.Read(tempData, 0, currentFrame.FrameSize);
+                            currentFrame.getFrameData(tempData);
                         }
-
-                        currentWorkingIndex = Frames[FrameHeaderName].Count - 1;
-
-                        Frames[FrameHeaderName][currentWorkingIndex].getFrameFlags(TempHeader[8], TempHeader[9]);
-
-                        //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
-                        bool unsync = false;
-
-                        if (MajorVersion > 3)
-                        {
-                            unsync = ((TempHeader[9] & 0x02) == 0x02);
-                        }
-                        if (AllFramesUnsynced)
-                        {
-                            unsync = true;
-                        }
-
-                        if (unsync && MajorVersion > 3)
-                        {
-                            Frames[FrameHeaderName][currentWorkingIndex].FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
-                        }
-                        else
-                        {
-                            Frames[FrameHeaderName][currentWorkingIndex].FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
-                        }
-
-                        totalFrameSize += Frames[FrameHeaderName][currentWorkingIndex].FrameSize;
-
-                        //Set FrameData
-                        byte[] tempData = new byte[Frames[FrameHeaderName][currentWorkingIndex].FrameSize];
-                        fs.Read(tempData, 0, Frames[FrameHeaderName][currentWorkingIndex].FrameSize);
-                        Frames[FrameHeaderName][currentWorkingIndex].getFrameData(tempData);
                     }
                 }
                 Console.WriteLine("TagSize: {0:D}, TotalFrameSize: {1:D}", TagSize, totalFrameSize);
                 Console.WriteLine();
-            }
-            else
-            {
-                Console.WriteLine("ID3v2.2 Not Supported. Skipping...");
             }
         }
 
@@ -1077,21 +1122,57 @@ public class ID3v2 : ID3
 
     private void ProcessFrames()
     {
-        //Set the Title
-        if (Frames.ContainsKey("TIT2"))
+        string[] FrameNames = 
         {
-            Title = (string)Frames["TIT2"][0].Data;
-        }
-        else if (Frames.ContainsKey("TT2"))
-        {
-            Title = (string)Frames["TT2"][0].Data;
-        }
+            "TIT2", "TT2",  //Title
+            "TPE1", "TP1",  //Artist
+            "TALB", "TAL",  //Album
+            "APIC", "PIC"   //Album Picture
+        };
 
-        //Picture Example
-        if (Frames.ContainsKey("APIC"))
+        foreach(string name in FrameNames)
         {
-            Type t = Frames["APIC"][0].Data.GetType();
-            //((ID3v2APICFrame)Frames["APIC"][0].Data).Picture.Save("C:\\" + this.Title + ".jpg");
+            if (Frames.ContainsKey(name))
+            {
+                switch (name)
+                {
+                    //Title
+                    case "TIT2":
+                    case "TT2":
+                        if (Frames[name][0].Data.GetType() == typeof(string))
+                        {
+                            Title = (string)Frames[name][0].Data;
+                        }
+                        break;
+
+                    //Artist
+                    case "TPE1":
+                    case "TP1":
+                        if (Frames[name][0].Data.GetType() == typeof(string))
+                        {
+                            Artist = (string)Frames[name][0].Data;
+                        }
+                        break;
+
+                    //Album
+                    case "TALB":
+                    case "TAL":
+                        if (Frames[name][0].Data.GetType() == typeof(string))
+                        {
+                            Album = (string)Frames[name][0].Data;
+                        }
+                        break;
+
+                    //Album Picture
+                    case "APIC":
+                    case "PIC":
+                        if (Frames[name][0].Data.GetType() == typeof(ID3v2APICFrame))
+                        {
+                            //((ID3v2APICFrame)Frames["APIC"][0].Data).Picture.Save("C:\\" + this.Title + ".jpg");
+                        }
+                        break;
+                }
+            }
         }
     }
 }
