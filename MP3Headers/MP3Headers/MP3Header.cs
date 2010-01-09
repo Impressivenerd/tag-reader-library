@@ -1015,30 +1015,31 @@ public class ID3v2 : ID3
                                 ((char)TempHeader[1]).ToString() +
                                 ((char)TempHeader[2]).ToString();
 
-                            int currentWorkingIndex = 0;
-
                             if (Frames.ContainsKey(FrameHeaderName))
                             {
-                                Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName));
+                                Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName, MajorVersion));
                             }
                             else
                             {
                                 List<ID3v2Frame> FrameList = new List<ID3v2Frame>();
-                                FrameList.Add(new ID3v2Frame(FrameHeaderName));
+                                FrameList.Add(new ID3v2Frame(FrameHeaderName, MajorVersion));
                                 Frames.Add(FrameHeaderName, FrameList);
                             }
 
-                            currentWorkingIndex = Frames[FrameHeaderName].Count - 1;
+                            int currentFrameIndex = Frames[FrameHeaderName].Count - 1;
+                            ID3v2Frame currentFrame = Frames[FrameHeaderName][currentFrameIndex];
+
+                            currentFrame.getFrameFlags((byte)0x00, (byte)0x00, AllFramesUnsynced);
 
                             //Frame Size
-                            Frames[FrameHeaderName][currentWorkingIndex].FrameSize = (int)((TempHeader[3] << 16) | (TempHeader[4] << 8) | (TempHeader[5]));
+                            currentFrame.FrameSize = (int)((TempHeader[3] << 16) | (TempHeader[4] << 8) | (TempHeader[5]));
 
-                            totalFrameSize += Frames[FrameHeaderName][currentWorkingIndex].FrameSize;
+                            totalFrameSize += currentFrame.FrameSize;
 
                             //Set FrameData
-                            byte[] tempData = new byte[Frames[FrameHeaderName][currentWorkingIndex].FrameSize];
-                            fs.Read(tempData, 0, Frames[FrameHeaderName][currentWorkingIndex].FrameSize);
-                            Frames[FrameHeaderName][currentWorkingIndex].getFrameData(tempData);
+                            byte[] tempData = new byte[currentFrame.FrameSize];
+                            fs.Read(tempData, 0, currentFrame.FrameSize);
+                            currentFrame.getFrameData(tempData);
                         }
                     }
                     else
@@ -1065,12 +1066,12 @@ public class ID3v2 : ID3
 
                             if (Frames.ContainsKey(FrameHeaderName))
                             {
-                                Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName));
+                                Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName, MajorVersion));
                             }
                             else
                             {
                                 List<ID3v2Frame> FrameList = new List<ID3v2Frame>();
-                                FrameList.Add(new ID3v2Frame(FrameHeaderName));
+                                FrameList.Add(new ID3v2Frame(FrameHeaderName, MajorVersion));
                                 Frames.Add(FrameHeaderName, FrameList);
                             }
                             
@@ -1078,19 +1079,10 @@ public class ID3v2 : ID3
                             int currentFrameIndex = Frames[FrameHeaderName].Count - 1;
                             ID3v2Frame currentFrame = Frames[FrameHeaderName][currentFrameIndex];
 
-                            currentFrame.getFrameFlags(TempHeader[8], TempHeader[9]);
+                            currentFrame.getFrameFlags(TempHeader[8], TempHeader[9], AllFramesUnsynced);
 
                             //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
-                            bool unsync = false;
-
-                            if (MajorVersion > 3)
-                            {
-                                unsync = ((TempHeader[9] & 0x02) == 0x02);
-                            }
-                            if (AllFramesUnsynced)
-                            {
-                                unsync = true;
-                            }
+                            bool unsync = currentFrame.FF_Unsynchronisation;
 
                             if (unsync && MajorVersion > 3)
                             {
@@ -1183,6 +1175,7 @@ public class ID3v2Frame
     public int FrameSize;
     public byte[] FrameData;
     public object Data;
+    public int MajorVersion;
 
     //Frame Status Flags [Byte 9/10]
     public bool FS_TagAlterPreserve; //a
@@ -1196,31 +1189,77 @@ public class ID3v2Frame
     public bool FF_Unsynchronisation; //n
     public bool FF_DataLengthIndicator; //p
 
-    public ID3v2Frame()
+    public ID3v2Frame(int ID3MajorVersion)
     {
+        MajorVersion = ID3MajorVersion;
         FrameName = "";
         FrameSize = 0;
     }
 
-    public ID3v2Frame(string frameName)
+    public ID3v2Frame(string frameName, int ID3MajorVersion)
     {
+        MajorVersion = ID3MajorVersion;
         FrameName = frameName;
         FrameSize = 0;
     }
 
     public void getFrameFlags(byte bytFrameFlag1, byte bytFrameFlag2)
     {
-        //Frame Status, bytFrameFlag1, %0abc0000
-        FS_TagAlterPreserve = ((bytFrameFlag1 & 0x40) == 0x40);
-        FS_FileAlterPreserve = ((bytFrameFlag1 & 0x20) == 0x20);
-        FS_ReadOnly = ((bytFrameFlag1 & 0x10) == 0x10);
+        getFrameFlags(bytFrameFlag1, bytFrameFlag2, false);
+    }
 
-        //Frame Format, bytFrameFlag2, %0h00kmnp
-        FF_GroupingIdentity = ((bytFrameFlag2 & 0x40) == 0x40);
-        FF_Compression = ((bytFrameFlag2 & 0x08) == 0x08);
-        FF_Encryption = ((bytFrameFlag2 & 0x04) == 0x04);
-        FF_Unsynchronisation = ((bytFrameFlag2 & 0x02) == 0x02);
-        FF_DataLengthIndicator = ((bytFrameFlag2 & 0x01) == 0x01);
+    public void getFrameFlags(byte bytFrameFlag1, byte bytFrameFlag2, bool ForceUnsync)
+    {
+        if (MajorVersion == 2)
+        {
+            //Everything is False (Except Possibly FF_Unsyncronisation)
+            FS_TagAlterPreserve = false;
+            FS_FileAlterPreserve = false;
+            FS_ReadOnly = false;
+            FF_Compression = false;
+            FF_Encryption = false;
+            FF_GroupingIdentity = false;
+            FF_DataLengthIndicator = false;
+
+            //Could possibly be true if ID3 Header says so
+            FF_Unsynchronisation = ForceUnsync;
+        }
+        else if (MajorVersion == 3)
+        {
+            //Frame Status, bytFrameFlag1, %abc00000
+            FS_TagAlterPreserve = ((bytFrameFlag1 & 0x80) == 0x80);     //a
+            FS_FileAlterPreserve = ((bytFrameFlag1 & 0x40) == 0x40);    //b
+            FS_ReadOnly = ((bytFrameFlag1 & 0x20) == 0x20);             //c
+
+            //Frame Format, bytFrameFlag2, %ijk00000
+            FF_Compression = ((bytFrameFlag2 & 0x80) == 0x80);          //i
+            FF_Encryption = ((bytFrameFlag2 & 0x40) == 0x40);           //j
+            FF_GroupingIdentity = ((bytFrameFlag2 & 0x20) == 0x20);     //k
+
+            //Unused
+            FF_Unsynchronisation = ForceUnsync;  //Will be false if ForceUnsync is false
+            FF_DataLengthIndicator = false;
+        }
+        else if (MajorVersion == 4)
+        {
+            //Frame Status, bytFrameFlag1, %0abc0000
+            FS_TagAlterPreserve = ((bytFrameFlag1 & 0x40) == 0x40);     //a
+            FS_FileAlterPreserve = ((bytFrameFlag1 & 0x20) == 0x20);    //b
+            FS_ReadOnly = ((bytFrameFlag1 & 0x10) == 0x10);             //c
+
+            //Frame Format, bytFrameFlag2, %0h00kmnp
+            FF_GroupingIdentity = ((bytFrameFlag2 & 0x40) == 0x40);     //h
+            FF_Compression = ((bytFrameFlag2 & 0x08) == 0x08);          //k
+            FF_Encryption = ((bytFrameFlag2 & 0x04) == 0x04);           //m
+            FF_Unsynchronisation = ((bytFrameFlag2 & 0x02) == 0x02);    //n
+            FF_DataLengthIndicator = ((bytFrameFlag2 & 0x01) == 0x01);  //p
+
+            //If ForceUnsyc was set
+            if (ForceUnsync)
+            {
+                FF_Unsynchronisation = true;
+            }
+        }
     }
 
     public void getFrameData(byte[] data)
@@ -1288,21 +1327,32 @@ public class ID3v2Frame
 
     public void ProcessFrame()
     {
-        //T-Type Frame (Text)
-        if (FrameName.ToCharArray()[0] == 'T' && FrameName != "TXXX")
+        byte[] NewFrameData;
+
+        if (FF_Unsynchronisation)
         {
-            if (FrameData.Length > 1)
+            NewFrameData = ID3.UnSync(FrameData);
+        }
+        else
+        {
+            NewFrameData = FrameData;
+        }
+
+        //T-Type Frame (Text)
+        if (FrameName.ToCharArray()[0] == 'T' && FrameName != "TXXX" && FrameName != "TXX")
+        {
+            if (NewFrameData.Length > 1)
             {
                 System.Text.Encoding enc = null;
                 bool useBOM = GetEncodingType(ref enc);
 
                 if (useBOM)
                 {
-                    Data = enc.GetString(FrameData, 1 + enc.GetPreamble().Length, FrameData.Length - (1 + enc.GetPreamble().Length));
+                    Data = enc.GetString(NewFrameData, 1 + enc.GetPreamble().Length, NewFrameData.Length - (1 + enc.GetPreamble().Length));
                 }
                 else
                 {
-                    Data = enc.GetString(FrameData, 1, FrameData.Length - 1);
+                    Data = enc.GetString(NewFrameData, 1, NewFrameData.Length - 1);
                 }
             }
             else
@@ -1312,22 +1362,22 @@ public class ID3v2Frame
                 Data = "";
             }
         }
-        else if (FrameName == "TXXX")
+        else if (FrameName == "TXXX" || FrameName == "TXX")
         {
-            //TXXX Frame Goes Here (TODO)
+            //TXXX, TXX Frame Goes Here (TODO)
         }
 
         //W-Type Frame (TODO: Needs more testing)
-        if (FrameName.ToCharArray()[0] == 'W' && FrameName != "WXXX")
+        if (FrameName.ToCharArray()[0] == 'W' && FrameName != "WXXX" && FrameName != "WXX")
         {
             Encoding enc = Encoding.ASCII;
-            Data = enc.GetString(FrameData, 0, FrameData.Length);
+            Data = enc.GetString(NewFrameData, 0, NewFrameData.Length);
         }
-        else if (FrameName == "WXXX")
+        else if (FrameName == "WXXX" || FrameName == "WXX")
         {
-            //WXXX is always ISO-8859-1 Encoded
+            //WXXX, WXX is always ISO-8859-1 Encoded
             Encoding enc = Encoding.GetEncoding("ISO-8859-1");
-            Data = enc.GetString(FrameData, 0, FrameData.Length);
+            Data = enc.GetString(NewFrameData, 0, NewFrameData.Length);
         }
 
         if (FrameName == "APIC")
@@ -1378,7 +1428,7 @@ public class ID3v2Frame
                   $13  Band/artist logotype
                   $14  Publisher/Studio logotype
              */
-            if (FrameData.Length > 1)
+            if (NewFrameData.Length > 1)
             {
                 Encoding enc = null;
                 bool useBOM = GetEncodingType(ref enc);
@@ -1386,7 +1436,7 @@ public class ID3v2Frame
                 if (useBOM)
                 {
                     //Skip BOM
-                    Data = enc.GetString(FrameData, 1 + enc.GetPreamble().Length, FrameData.Length - (1 + enc.GetPreamble().Length));
+                    Data = enc.GetString(NewFrameData, 1 + enc.GetPreamble().Length, NewFrameData.Length - (1 + enc.GetPreamble().Length));
                 }
                 else
                 {
@@ -1398,39 +1448,28 @@ public class ID3v2Frame
 
                     //Get MimeType
                     int BeginMimeType = DataPosition;
-                    while (FrameData[DataPosition] != 0x00)
+                    while (NewFrameData[DataPosition] != 0x00)
                     {
                         DataPosition++;
                     }
-                    apic.MIMEType = enc.GetString(FrameData, BeginMimeType, DataPosition - BeginMimeType);
+                    apic.MIMEType = enc.GetString(NewFrameData, BeginMimeType, DataPosition - BeginMimeType);
 
                     //Get ImageType
                     DataPosition++;
-                    apic.ImageType = FrameData[DataPosition];
+                    apic.ImageType = NewFrameData[DataPosition];
 
                     //Get Description
                     int BeginDescription = ++DataPosition;
-                    while (FrameData[DataPosition] != 0x00)
+                    while (NewFrameData[DataPosition] != 0x00)
                     {
                         DataPosition++;
                     }
-                    apic.Description = enc.GetString(FrameData, BeginDescription, DataPosition - BeginDescription);
+                    apic.Description = enc.GetString(NewFrameData, BeginDescription, DataPosition - BeginDescription);
 
                     //Get Binary Data
                     DataPosition++;
-                    if (FF_Unsynchronisation)
-                    {
-                        //Change FF0000 to FF00
-                        byte[] copiedArray = new byte[FrameData.Length - DataPosition];
-                        Array.Copy(FrameData, DataPosition, copiedArray, 0, FrameData.Length - DataPosition);
-                        MemoryStream a = new MemoryStream(ID3.UnSync(copiedArray), false);
-                        apic.Picture = Image.FromStream(a);
-                    }
-                    else
-                    {
-                        MemoryStream ms = new MemoryStream(FrameData, DataPosition, FrameData.Length - DataPosition);
-                        apic.Picture = Image.FromStream(ms);
-                    }
+                    MemoryStream ms = new MemoryStream(NewFrameData, DataPosition, NewFrameData.Length - DataPosition);
+                    apic.Picture = Image.FromStream(ms);
 
                     Data = apic;
                 }
@@ -1439,7 +1478,7 @@ public class ID3v2Frame
     }
 }
 
-public struct ID3v2CustomFrame
+public struct ID3v2UserFrame
 {
     public string Description;
     public string Value;
