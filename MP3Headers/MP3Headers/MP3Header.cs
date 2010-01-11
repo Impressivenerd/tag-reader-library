@@ -65,8 +65,8 @@ public class MP3Header
     //private bool id3v1; //Temporarily to determine if id3v1 is present
     //private bool id3v2; //Temporarily to determine if id3v2 is present
 
-    private ID3v1 id3v1;
-    private ID3v2 id3v2;
+    public ID3v1 id3v1;
+    public ID3v2 id3v2;
 
     public bool ReadMP3Information(string FileName)
     {
@@ -526,6 +526,7 @@ public class MP3Header
         info += "[ID3v1]\n";
         if (id3v1.Exists)
         {
+            info += "ID3v1 Version: ID3v1." + id3v1.MajorVersion.ToString() + "\n";
             info += "Title: " + id3v1.Title + "\n";
             info += "Artist: " + id3v1.Artist + "\n";
             info += "Album: " + id3v1.Album + "\n";
@@ -568,6 +569,9 @@ public class ID3
     public bool Exists;
     public int TagSize;
 
+    public int MajorVersion;
+    public int MinorVersion;
+
     public static int syncsafe(byte byt1, byte byt2, byte byt3, byte byt4)
     {
         return (int)((byt1 << 21) | (byt2 << 14) | (byt3 << 7) | byt4);
@@ -603,7 +607,7 @@ public class ID3
         return t;
     }
 
-    public string getGenre(int genreID)
+    protected string getGenre(int genreID)
     {
         switch (genreID)
         {
@@ -868,22 +872,31 @@ public class ID3
     }
 }
 
+public class ID3v2ExtendedHeader
+{
+    public bool Exists;
+    public bool TagIsUpdate;
+    public bool CRCPresent;
+    public bool TagRestrictions;
+
+    public ID3v2ExtendedHeader()
+    {
+        Exists = false;
+        TagIsUpdate = false;
+        CRCPresent = false;
+        TagRestrictions = false;
+    }
+}
+
 public class ID3v2 : ID3
 {
-    //Version Information
-    public int MajorVersion;
-    public int MinorVersion;
-
     public bool AllFramesUnsynced;
     public bool Compression; //ID3v2.2 ONLY
 
     /*****
      * Extended Header Options
      *****/
-    public bool ExtendedHeaderExists;
-    public bool EH_TagIsUpdate;
-    public bool EH_CRCPresent;
-    public bool EH_TagRestrictions;
+    ID3v2ExtendedHeader ExtendedHeader;
 
     public bool Experimental;
     public bool FooterExists;
@@ -907,10 +920,7 @@ public class ID3v2 : ID3
         AllFramesUnsynced = false;
         Compression = false;
 
-        ExtendedHeaderExists = false;
-        EH_TagIsUpdate = false;
-        EH_CRCPresent = false;
-        EH_TagRestrictions = false;
+        ExtendedHeader = new ID3v2ExtendedHeader();
 
         Experimental = false;
         FooterExists = false;
@@ -931,13 +941,13 @@ public class ID3v2 : ID3
             case 3:
                 //ID3v2.3 Flag defined: abc00000
                 AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);    //a - Unsynchronisation
-                ExtendedHeaderExists = ((bytFlags & 0x40) == 0x40); //b - Extended Header
+                ExtendedHeader.Exists = ((bytFlags & 0x40) == 0x40); //b - Extended Header
                 Experimental = ((bytFlags & 0x20) == 0x20);         //c - Experimental Indicator
                 break;
             case 4:
                 //ID3v2.4 Flag defined: abcd0000
                 AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);     //a - Unsynchronisation
-                ExtendedHeaderExists = ((bytFlags & 0x40) == 0x40);  //b - Extended Header
+                ExtendedHeader.Exists = ((bytFlags & 0x40) == 0x40);  //b - Extended Header
                 Experimental = ((bytFlags & 0x20) == 0x20);          //c - Experimental Indicator
                 FooterExists = ((bytFlags & 0x10) == 0x10);          //d - Footer Present
                 break;
@@ -1034,7 +1044,7 @@ public class ID3v2 : ID3
                             //Frame Size
                             currentFrame.FrameSize = (int)((TempHeader[3] << 16) | (TempHeader[4] << 8) | (TempHeader[5]));
 
-                            totalFrameSize += currentFrame.FrameSize;
+                            totalFrameSize += currentFrame.FrameSize + 6; //+6 for Frame Header
 
                             //Set FrameData
                             byte[] tempData = new byte[currentFrame.FrameSize];
@@ -1093,7 +1103,7 @@ public class ID3v2 : ID3
                                 currentFrame.FrameSize = (int)((TempHeader[4] << 24) | (TempHeader[5] << 16) | (TempHeader[6] << 8) | (TempHeader[7]));
                             }
 
-                            totalFrameSize += currentFrame.FrameSize;
+                            totalFrameSize += currentFrame.FrameSize + 10; //+10 for Frame Header
 
                             //Set FrameData
                             byte[] tempData = new byte[currentFrame.FrameSize];
@@ -1102,6 +1112,7 @@ public class ID3v2 : ID3
                         }
                     }
                 }
+                Console.WriteLine("Padding Exsists: {0}", PaddingExists.ToString());
                 Console.WriteLine("TagSize: {0:D}, TotalFrameSize: {1:D}", TagSize, totalFrameSize);
                 Console.WriteLine();
             }
@@ -1160,12 +1171,38 @@ public class ID3v2 : ID3
                     case "PIC":
                         if (Frames[name][0].Data.GetType() == typeof(ID3v2APICFrame))
                         {
-                            //((ID3v2APICFrame)Frames["APIC"][0].Data).Picture.Save("C:\\" + this.Title + ".jpg");
+                            //((ID3v2APICFrame)Frames[name][0].Data).Picture.Save("2_" + this.Title + ".jpg");
                         }
                         break;
                 }
             }
         }
+    }
+
+    public Image getImage(ID3v2APICImageType iType)
+    {
+        string FrameName = "";
+        if (Frames.ContainsKey("APIC"))
+        {
+            FrameName = "APIC";
+        }
+        else if (Frames.ContainsKey("PIC"))
+        {
+            FrameName = "PIC";
+        }
+
+        if (FrameName != "")
+        {
+            foreach (ID3v2Frame t in Frames[FrameName])
+            {
+                if ( (ID3v2APICImageType)((ID3v2APICFrame)t.Data).ImageType == iType)
+                {
+                    return ((ID3v2APICFrame)t.Data).Picture;
+                }
+            }
+        }
+
+        return null;
     }
 }
 
@@ -1354,6 +1391,12 @@ public class ID3v2Frame
                 {
                     Data = enc.GetString(NewFrameData, 1, NewFrameData.Length - 1);
                 }
+
+                //ID3v2.2 Has a Null Terminator at the end (0x00)
+                if (MajorVersion == 2 && Data.ToString()[Data.ToString().Length - 1] == '\0')
+                {
+                    Data = Data.ToString().Remove(Data.ToString().Length - 1);
+                }
             }
             else
             {
@@ -1380,54 +1423,8 @@ public class ID3v2Frame
             Data = enc.GetString(NewFrameData, 0, NewFrameData.Length);
         }
 
-        if (FrameName == "APIC")
+        if (FrameName == "APIC" || FrameName == "PIC")
         {
-            /*
-   This frame contains a picture directly related to the audio file.
-   Image format is the MIME type and subtype [MIME] for the image. In
-   the event that the MIME media type name is omitted, "image/" will be
-   implied. The "image/png" [PNG] or "image/jpeg" [JFIF] picture format
-   should be used when interoperability is wanted. Description is a
-   short description of the picture, represented as a terminated
-   text string. There may be several pictures attached to one file, each
-   in their individual "APIC" frame, but only one with the same content
-   descriptor. There may only be one picture with the picture type
-   declared as picture type $01 and $02 respectively. There is the
-   possibility to put only a link to the image file by using the 'MIME
-   type' "-->" and having a complete URL [URL] instead of picture data.
-   The use of linked files should however be used sparingly since there
-   is the risk of separation of files.
-
-     <Header for 'Attached picture', ID: "APIC">
-     Text encoding      $xx
-     MIME type          <text string> $00
-     Picture type       $xx
-     Description        <text string according to encoding> $00 (00)
-     Picture data       <binary data>
-
-
-   Picture type:  $00  Other
-                  $01  32x32 pixels 'file icon' (PNG only)
-                  $02  Other file icon
-                  $03  Cover (front)
-                  $04  Cover (back)
-                  $05  Leaflet page
-                  $06  Media (e.g. label side of CD)
-                  $07  Lead artist/lead performer/soloist
-                  $08  Artist/performer
-                  $09  Conductor
-                  $0A  Band/Orchestra
-                  $0B  Composer
-                  $0C  Lyricist/text writer
-                  $0D  Recording Location
-                  $0E  During recording
-                  $0F  During performance
-                  $10  Movie/video screen capture
-                  $11  A bright coloured fish
-                  $12  Illustration
-                  $13  Band/artist logotype
-                  $14  Publisher/Studio logotype
-             */
             if (NewFrameData.Length > 1)
             {
                 Encoding enc = null;
@@ -1447,12 +1444,20 @@ public class ID3v2Frame
                     DataPosition++;
 
                     //Get MimeType
-                    int BeginMimeType = DataPosition;
-                    while (NewFrameData[DataPosition] != 0x00)
+                    if (MajorVersion > 2)
                     {
-                        DataPosition++;
+                        int BeginMimeType = DataPosition;
+                        while (NewFrameData[DataPosition] != 0x00)
+                        {
+                            DataPosition++;
+                        }
+                        apic.MIMEType = enc.GetString(NewFrameData, BeginMimeType, DataPosition - BeginMimeType);
                     }
-                    apic.MIMEType = enc.GetString(NewFrameData, BeginMimeType, DataPosition - BeginMimeType);
+                    else
+                    {
+                        apic.MIMEType = enc.GetString(NewFrameData, DataPosition, 3);
+                        DataPosition += 2; //Should be Increment by 3, but next instruction is to increment by 1
+                    }
 
                     //Get ImageType
                     DataPosition++;
@@ -1484,12 +1489,44 @@ public struct ID3v2UserFrame
     public string Value;
 }
 
+public enum ID3v2APICImageType
+{
+    Other = 0,
+    FileIcon,
+    OtherIcon,
+    CoverFront,
+    CoverBack,
+    LeafletPage,
+    Media,
+    LeadArtist,
+    Artist,
+    Conductor,
+    Band,
+    Composer,
+    Lyricist,
+    RecordingLocation,
+    DuringRecording,
+    MovieScreenCapture,
+    BrightFish,
+    Illustration,
+    BandLogo,
+    PublisherLogo
+}
+
 public class ID3v2APICFrame
 {
     public string MIMEType;
     public string Description;
     public byte ImageType;
     public Image Picture;
+
+    public bool IsType(ID3v2APICImageType iType)
+    {
+        if ((ID3v2APICImageType)ImageType == iType)
+            return true;
+        else
+            return false;
+    }
 
     public string PictureType()
     {
@@ -1546,6 +1583,9 @@ public class ID3v1 : ID3
 {
     public ID3v1()
     {
+        MajorVersion = 0;
+        MinorVersion = 0; //Never Changes for ID3v1
+
         Title = "";
         Artist = "";
         Album = "";
@@ -1624,6 +1664,7 @@ public class ID3v1 : ID3
             {
                 //ID3v1.1
                 Track = (int)bytHeaderTAG[126];
+                MajorVersion = 1;
             }
             else
             {
