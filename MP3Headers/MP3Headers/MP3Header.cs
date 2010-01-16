@@ -1634,18 +1634,21 @@ public class ID3v1 : ID3
             {
                 Title += (char)bytHeaderTAG[i];
             }
+            Title = Title.Trim('\0');   //Remove any Nulls
 
             //Artist
             for (int i = 33; i <= 62; ++i)
             {
                 Artist += (char)bytHeaderTAG[i];
             }
+            Artist = Artist.Trim('\0'); //Remove any Nulls
 
             //Album
             for (int i = 63; i <= 92; ++i)
             {
                 Album += (char)bytHeaderTAG[i];
             }
+            Album = Album.Trim('\0');   //Remove any Nulls
 
             //Year
             for (int i = 93; i <= 96; ++i)
@@ -1671,6 +1674,7 @@ public class ID3v1 : ID3
                 //ID3v1.0
                 Comment += (char)bytHeaderTAG[126];
             }
+            Comment = Comment.Trim('\0');   //Remove any Nulls
 
             //GenreID
             GenreID = (int)bytHeaderTAG[127];
