@@ -68,6 +68,11 @@ public class MP3Header
     public ID3v1 id3v1;
     public ID3v2 id3v2;
 
+    public MP3Header(string FileName)
+    {
+        ReadMP3Information(FileName);
+    }
+
     public bool ReadMP3Information(string FileName)
     {
         FileStream fs = new FileStream(FileName, FileMode.Open, FileAccess.Read);
@@ -878,13 +883,51 @@ public class ID3v2ExtendedHeader
     public bool TagIsUpdate;
     public bool CRCPresent;
     public bool TagRestrictions;
+    public int MajorVersion;
+    public int size;
+    public bool ForceUnsync;
 
     public ID3v2ExtendedHeader()
     {
+        //Default Values
+        setDefaults();
+    }
+
+    private void setDefaults()
+    {
+        MajorVersion = 0;
+
         Exists = false;
         TagIsUpdate = false;
         CRCPresent = false;
         TagRestrictions = false;
+    }
+
+    public void setID3Version(int ID3MajorVersion)
+    {
+        MajorVersion = ID3MajorVersion;
+    }
+
+    public void setData(byte[] data)
+    {
+
+    }
+
+    public void processFlags()
+    {
+        switch (MajorVersion)
+        {
+            default:
+            case 2:
+                //ID3v2.2 = ExtendedHeader Not Supported
+                break;
+            case 3:
+                //ID3v2.3 = %x0000000 00000000 (x = CRCPresent)
+                break;
+            case 4:
+                //ID3v2.4 = %0bcd0000 (b = TagIsUpdate, c = CRCPresent, d = TagRestrictions)
+                break;
+        }
     }
 }
 
@@ -896,7 +939,7 @@ public class ID3v2 : ID3
     /*****
      * Extended Header Options
      *****/
-    ID3v2ExtendedHeader ExtendedHeader;
+    public ID3v2ExtendedHeader ExtendedHeader;
 
     public bool Experimental;
     public bool FooterExists;
@@ -935,21 +978,21 @@ public class ID3v2 : ID3
         {
             case 2:
                 //ID3v2.2 Flag defined: ab000000
-                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);    //a - Unsynchronisation
-                Compression = ((bytFlags & 0x40) == 0x40);     //b - Compression (if set, skip the entire tag)
+                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);        //a - Unsynchronisation
+                Compression = ((bytFlags & 0x40) == 0x40);              //b - Compression (if set, skip the entire tag)
                 break;
             case 3:
                 //ID3v2.3 Flag defined: abc00000
-                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);    //a - Unsynchronisation
-                ExtendedHeader.Exists = ((bytFlags & 0x40) == 0x40); //b - Extended Header
-                Experimental = ((bytFlags & 0x20) == 0x20);         //c - Experimental Indicator
+                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);        //a - Unsynchronisation
+                ExtendedHeader.Exists = ((bytFlags & 0x40) == 0x40);    //b - Extended Header
+                Experimental = ((bytFlags & 0x20) == 0x20);             //c - Experimental Indicator
                 break;
             case 4:
                 //ID3v2.4 Flag defined: abcd0000
-                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);     //a - Unsynchronisation
-                ExtendedHeader.Exists = ((bytFlags & 0x40) == 0x40);  //b - Extended Header
-                Experimental = ((bytFlags & 0x20) == 0x20);          //c - Experimental Indicator
-                FooterExists = ((bytFlags & 0x10) == 0x10);          //d - Footer Present
+                AllFramesUnsynced = ((bytFlags & 0x80) == 0x80);        //a - Unsynchronisation
+                ExtendedHeader.Exists = ((bytFlags & 0x40) == 0x40);    //b - Extended Header
+                Experimental = ((bytFlags & 0x20) == 0x20);             //c - Experimental Indicator
+                FooterExists = ((bytFlags & 0x10) == 0x10);             //d - Footer Present
                 break;
             default:
                 //Unknown - All Flags False
@@ -994,11 +1037,37 @@ public class ID3v2 : ID3
 
             Exists = true;
 
+            //Experimental - Extended Header Implementation
+            ExtendedHeader.setID3Version(MajorVersion);
+            if (ExtendedHeader.Exists && MajorVersion > 2)
+            {
+                byte[] EH_Size = new byte[4];
+                fs.Read(EH_Size, 0, 4);
+
+                if (MajorVersion == 3)
+                {
+                    //Extended Header size, excluding itself; only 6 or 10 bytes
+                    ExtendedHeader.size = (int)((EH_Size[0] << 24) | (EH_Size[1] << 16) | (EH_Size[2] << 8) | (EH_Size[3]));
+                    byte[] headerAndData = new byte[4 + ExtendedHeader.size];
+                    fs.Position = 10;
+                    fs.Read(headerAndData, 0, headerAndData.Length);
+                    ExtendedHeader.setData(headerAndData);
+                }
+                else if (MajorVersion == 4)
+                {
+                    //Whole Extended Header
+                    ExtendedHeader.size = ID3.syncsafe(EH_Size[0], EH_Size[1], EH_Size[2], EH_Size[3]);
+                    byte[] headerAndData = new byte[ExtendedHeader.size];
+                    fs.Position = 10;
+                    fs.Read(headerAndData, 0, headerAndData.Length);
+                    ExtendedHeader.setData(headerAndData);
+                }
+            }
+
             //ID3v2.2.X uses 3 letter identifiers versus the 4 letter identifiers in 2.3.X and 2.4.X
             if (!Compression)
             {
                 Console.WriteLine("ID3v2.{0:D} Detected...", MajorVersion);
-                fs.Position = 10;
                 int totalFrameSize = 0;
 
                 int AdditionalBytes = 10;
@@ -1058,7 +1127,8 @@ public class ID3v2 : ID3
                         byte[] TempHeader = new byte[10];
                         fs.Read(TempHeader, 0, 10);
 
-                        if (!FooterExists && (TempHeader[0] == 0x00 && TempHeader[1] == 0x00 && TempHeader[2] == 0x00 && TempHeader[3] == 0x00))
+                        //All Tags must be 4 Characters (characters capital A-Z and 0-9; not null)
+                        if (!FooterExists && (TempHeader[0] == 0x00 || TempHeader[1] == 0x00 || TempHeader[2] == 0x00 || TempHeader[3] == 0x00))
                         {
                             //Nothing Here but Padding; Skip to the end of the tag
                             //Footer and Padding are Mutually Exclusive
@@ -1091,10 +1161,10 @@ public class ID3v2 : ID3
 
                             currentFrame.getFrameFlags(TempHeader[8], TempHeader[9], AllFramesUnsynced);
 
-                            //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does, doesn't if unsync flag is active)
+                            //ID3v2.3 does not appear to use syncsafe numbers for frame sizes (2.4 does)
                             bool unsync = currentFrame.FF_Unsynchronisation;
 
-                            if (unsync && MajorVersion > 3)
+                            if (MajorVersion > 3)
                             {
                                 currentFrame.FrameSize = ID3.syncsafe(TempHeader[4], TempHeader[5], TempHeader[6], TempHeader[7]);
                             }
@@ -1309,8 +1379,9 @@ public class ID3v2Frame
     }
 
     //Assigns enc through reference, and returns a bool if we are using Byte Order Marks
-    private bool GetEncodingType(ref Encoding enc)
+    private bool GetEncodingType(ref Encoding enc, int start)
     {
+        enc = null;          //Reset Encoder to Null to begin
         bool useBOM = false; //BOM = Unicode Byte Order Mark
         
         //System.Text.Encoding enc = null;
@@ -1349,7 +1420,7 @@ public class ID3v2Frame
 
                 for (int j = 0; PreambleEqual && j < Preamble.Length; ++j)
                 {
-                    PreambleEqual = Preamble[j] == FrameData[j+1]; //+1 = Skip Text Encoding Byte
+                    PreambleEqual = Preamble[j] == FrameData[j+start]; //+start position = Skip Text Encoding Byte
                 }
 
                 if (PreambleEqual)
@@ -1358,6 +1429,8 @@ public class ID3v2Frame
                 }
             }
         }
+
+
 
         return useBOM;
     }
@@ -1381,7 +1454,7 @@ public class ID3v2Frame
             if (NewFrameData.Length > 1)
             {
                 System.Text.Encoding enc = null;
-                bool useBOM = GetEncodingType(ref enc);
+                bool useBOM = GetEncodingType(ref enc, 1);
 
                 if (useBOM)
                 {
@@ -1392,11 +1465,7 @@ public class ID3v2Frame
                     Data = enc.GetString(NewFrameData, 1, NewFrameData.Length - 1);
                 }
 
-                //ID3v2.2 Has a Null Terminator at the end (0x00)
-                if (MajorVersion == 2 && Data.ToString()[Data.ToString().Length - 1] == '\0')
-                {
-                    Data = Data.ToString().Remove(Data.ToString().Length - 1);
-                }
+                Data = ((string)Data).Trim('\0').Trim();
             }
             else
             {
@@ -1427,57 +1496,82 @@ public class ID3v2Frame
         {
             if (NewFrameData.Length > 1)
             {
-                Encoding enc = null;
-                bool useBOM = GetEncodingType(ref enc);
+                int DataPosition = 0;
+                ID3v2APICFrame apic = new ID3v2APICFrame();
 
-                if (useBOM)
+                //Skip just Text Encoding
+                DataPosition++;
+
+                //Get MimeType (as Generic Text)
+                Encoding enc = Encoding.ASCII;
+                if (MajorVersion > 2)
                 {
-                    //Skip BOM
-                    Data = enc.GetString(NewFrameData, 1 + enc.GetPreamble().Length, NewFrameData.Length - (1 + enc.GetPreamble().Length));
-                }
-                else
-                {
-                    int DataPosition = 0;
-                    ID3v2APICFrame apic = new ID3v2APICFrame();
-
-                    //Skip just Text Encoding
-                    DataPosition++;
-
-                    //Get MimeType
-                    if (MajorVersion > 2)
-                    {
-                        int BeginMimeType = DataPosition;
-                        while (NewFrameData[DataPosition] != 0x00)
-                        {
-                            DataPosition++;
-                        }
-                        apic.MIMEType = enc.GetString(NewFrameData, BeginMimeType, DataPosition - BeginMimeType);
-                    }
-                    else
-                    {
-                        apic.MIMEType = enc.GetString(NewFrameData, DataPosition, 3);
-                        DataPosition += 2; //Should be Increment by 3, but next instruction is to increment by 1
-                    }
-
-                    //Get ImageType
-                    DataPosition++;
-                    apic.ImageType = NewFrameData[DataPosition];
-
-                    //Get Description
-                    int BeginDescription = ++DataPosition;
+                    int BeginMimeType = DataPosition;
                     while (NewFrameData[DataPosition] != 0x00)
                     {
                         DataPosition++;
                     }
-                    apic.Description = enc.GetString(NewFrameData, BeginDescription, DataPosition - BeginDescription);
-
-                    //Get Binary Data
-                    DataPosition++;
-                    MemoryStream ms = new MemoryStream(NewFrameData, DataPosition, NewFrameData.Length - DataPosition);
-                    apic.Picture = Image.FromStream(ms);
-
-                    Data = apic;
+                    apic.MIMEType = enc.GetString(NewFrameData, BeginMimeType, DataPosition - BeginMimeType);
                 }
+                else
+                {
+                    apic.MIMEType = enc.GetString(NewFrameData, DataPosition, 3);
+                    DataPosition += 2; //Should be Increment by 3, but next instruction is to increment by 1
+                }
+
+                //Get ImageType
+                DataPosition++;
+                apic.ImageType = NewFrameData[DataPosition];
+
+                //Get Description
+                DataPosition++;
+                bool useBOM = GetEncodingType(ref enc, DataPosition); //Determine what encoding style we need
+
+                int BeginDescription = DataPosition;
+                if (DataPosition + 1 < NewFrameData.Length && enc == Encoding.Unicode)  //Little Endian, Every Two Bytes (16bits)
+                {
+                    while (!(NewFrameData[DataPosition] == 0x00 && NewFrameData[DataPosition + 1] == 0x00))
+                    {
+                        DataPosition += 2;
+                    }
+                    
+                    //Skip Past $00 00 at End
+                    DataPosition += 2;
+                }
+                else
+                {
+                    while (NewFrameData[DataPosition] != 0x00)
+                    {
+                        DataPosition++;
+                    }
+                    
+                    //Skip Past $00 at End
+                    DataPosition++;
+                }
+
+                if (!useBOM)
+                {
+                    apic.Description = enc.GetString(NewFrameData, BeginDescription, DataPosition - BeginDescription);
+                }
+                else
+                {
+                    apic.Description = enc.GetString(NewFrameData, BeginDescription + enc.GetPreamble().Length, (DataPosition - (BeginDescription + enc.GetPreamble().Length)) );
+                }
+                apic.Description = apic.Description.Trim('\0').Trim();
+
+                //Get Binary Data
+                MemoryStream ms = new MemoryStream(NewFrameData, DataPosition, NewFrameData.Length - DataPosition);
+                try
+                {
+                    apic.Picture = Image.FromStream(ms);
+                }
+                catch (System.ArgumentException ex)
+                {
+                    apic.Picture = null;
+                    Console.WriteLine(ex.Message);
+                }
+                
+                Data = apic;
             }
         }
     }
@@ -1634,27 +1728,28 @@ public class ID3v1 : ID3
             {
                 Title += (char)bytHeaderTAG[i];
             }
-            Title = Title.Trim('\0');   //Remove any Nulls
+            Title = Title.Trim('\0').Trim();   //Remove any Nulls
 
             //Artist
             for (int i = 33; i <= 62; ++i)
             {
                 Artist += (char)bytHeaderTAG[i];
             }
-            Artist = Artist.Trim('\0'); //Remove any Nulls
+            Artist = Artist.Trim('\0').Trim(); //Remove any Nulls
 
             //Album
             for (int i = 63; i <= 92; ++i)
             {
                 Album += (char)bytHeaderTAG[i];
             }
-            Album = Album.Trim('\0');   //Remove any Nulls
+            Album = Album.Trim('\0').Trim();   //Remove any Nulls
 
             //Year
             for (int i = 93; i <= 96; ++i)
             {
                 Year += (char)bytHeaderTAG[i];
             }
+            Year.Trim('\0').Trim();
 
             //Comment
             for (int i = 97; i <= 125; ++i)
@@ -1674,7 +1769,7 @@ public class ID3v1 : ID3
                 //ID3v1.0
                 Comment += (char)bytHeaderTAG[126];
             }
-            Comment = Comment.Trim('\0');   //Remove any Nulls
+            Comment = Comment.Trim('\0').Trim();   //Remove any Nulls
 
             //GenreID
             GenreID = (int)bytHeaderTAG[127];
