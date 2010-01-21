@@ -12,7 +12,6 @@ namespace MP3Headers
             MP3Header mp3EHText = new MP3Header("TestEH.mp3");
             MP3Header mp3_id324 = new MP3Header("Sample ID3v2.4.mp3");
             MP3Header mp3Test = new MP3Header("Test.mp3");
-            Console.WriteLine(mp3Test.ToString());
             MP3Header mp3_cbr = new MP3Header("Sample CBR.mp3");
             MP3Header mp3_vbr = new MP3Header("Sample VBR.mp3");
 
