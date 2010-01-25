@@ -45,7 +45,7 @@ public class MPEGAudioFrame
     public int EmphasisIndex;      //M
 
     public bool Valid;
-    public int Length;
+    public int Size;
     
 
     public MPEGAudioFrame(byte[] Header)
@@ -124,12 +124,18 @@ public class MPEGAudioFrame
         int Padding = (PaddingBit) ? 1 : 0;
         if (getLayer() == 1)
         {
-            Length = (12 * (getBitrate() * 1000) / getFrequency() + Padding) * 4;
+            Size = (12 * (getBitrate() * 1000) / getFrequency() + Padding) * 4;
         }
         else
         {
-            Length = 144 * (getBitrate() * 1000) / getFrequency() + Padding;
+            Size = 144 * (getBitrate() * 1000) / getFrequency() + Padding;
         }
+    }
+
+    public double getVersion()
+    {
+        double[] VersionTable = { 2.5, 0.0, 2.0, 1.0 };
+        return VersionTable[VersionIndex];
     }
 
     public int getLayer()
@@ -170,9 +176,46 @@ public class MPEGAudioFrame
 
         return FrequencyTable[VersionIndex, FrequencyIndex];
     }
+
+    public string getChannelMode()
+    {
+        switch (ChannelModeIndex)
+        {
+            default:
+            case 0:
+                return "Stereo";
+            case 1:
+                return "Joint Stereo";
+            case 2:
+                return "Dual Channel";
+            case 3:
+                return "Single Channel";
+        }
+    }
+
+    public void getExtentionMode() 
+    {
+        //TODO: Figure out how to return the Extension Mode
+    }
+    
+    public string getEmphasis() 
+    {
+        switch (EmphasisIndex)
+        {
+            default:
+            case 0:
+                return "none";
+            case 1:
+                return "50/15 ms";
+            case 2:
+                return "reserved";
+            case 3:
+                return "CCIT J.17";
+        }
+    }
 }
 
-public class MP3Header
+public class MP3
 {
     // Public variables for storing the information about the MP3
     public int intBitRate;
@@ -200,15 +243,16 @@ public class MP3Header
     public string strLengthFormatted;
 
     // Private variables used in the process of reading in the MP3 files
-    private ulong bithdr;
-    private bool boolVBitRate;
+    private bool bVBR;
     private int intVFrames;
     
     //Jeff
-    private int padding;
-    private int totalAudioFrames;
+    private MPEGAudioFrame Header;
     private long posFirstAudioFrame;
     private long posLastAudioFrame;
+    private int totalAudioFrames;
+
+    public bool Valid;
 
     //private bool id3v1; //Temporarily to determine if id3v1 is present
     //private bool id3v2; //Temporarily to determine if id3v2 is present
@@ -216,14 +260,10 @@ public class MP3Header
     public ID3v1 id3v1;
     public ID3v2 id3v2;
 
-    public MP3Header(string FileName)
-    {
-        ReadMP3Information(FileName);
-    }
-
-    public bool ReadMP3Information(string FileName)
+    public MP3(string FileName)
     {
         FileStream fs = new FileStream(FileName, FileMode.Open, FileAccess.Read);
+        Valid = false;
 
         // Set the filename not including the path information
         strFileName = @fs.Name;
@@ -244,8 +284,6 @@ public class MP3Header
         
         // Keep reading 4 bytes from the header until we know for sure that in 
         // fact it's an MP3
-        bool valid = false; //Jeff - Determine if the MP3 is valid
-        int frameSize = 0;  //Jeff - Size of the MPEG frame
         int nextFrame = 0;  //Jeff - Location in stream to next Frame (current position + framesize)
 
         //Read if id3v1 exists
@@ -272,85 +310,40 @@ public class MP3Header
             fs.Position = intPos;
             fs.Read(bytHeader, 0, 4);
 
-            if (quickHeaderCheck(bytHeader))
+            Header = new MPEGAudioFrame(bytHeader);
+            if (Header.Valid)
             {
-                LoadMP3Header(bytHeader);
-                if (IsValidHeader())
+                nextFrame = intPos + Header.Size;
+                fs.Position = nextFrame;
+                fs.Read(bytHeader, 0, 4);
+                MPEGAudioFrame SecondHeader = new MPEGAudioFrame(bytHeader);
+                if (SecondHeader.Valid)
                 {
-                    //Get the current frame size to find where the next frame *should* be
-                    frameSize = 144 * (getBitrate() * 1000) / getFrequency() + getPaddingQuick(bytHeader);
-                    nextFrame = intPos + frameSize;
-                    fs.Position = nextFrame;
-                    fs.Read(bytHeader, 0, 4);
-                    if (quickHeaderCheck(bytHeader))
-                    {
-                        posFirstAudioFrame = intPos;
-                        LoadMP3Header(bytHeader);
-                        padding = getPaddingQuick(bytHeader);
-                        valid = true;
-                        break;
-                    }
-                    else
-                    {
-                        //The next frame did not appear valid - reset stream position
-                        fs.Position = intPos;
-                    }
+                    posFirstAudioFrame = intPos;
+                    Valid = true;
+                    break;
+                }
+                else
+                {
+                    //The next frame did not appear valid - reset stream position
+                    fs.Position = intPos;
                 }
             }
 
             intPos++;
         }
-        while (!valid && (fs.Position != fs.Length));
-        //while(!IsValidHeader() && (fs.Position!=fs.Length));
-
-        //Get Number of Audio Frames
-        /*this.totalAudioFrames = 1;
-        if (valid)
-        {
-            intPos = (int)posFirstAudioFrame;
-            while (valid)
-            {
-                fs.Position = intPos;
-                fs.Read(bytHeader, 0, 4);
-                if (quickHeaderCheck(bytHeader))
-                {
-                    LoadMP3Header(bytHeader);
-                    if (IsValidHeader())
-                    {
-                        frameSize = 144 * (getBitrate() * 1000) / getFrequency() + getPaddingQuick(bytHeader);
-                        nextFrame = intPos + frameSize;
-                        fs.Position = nextFrame;
-                        fs.Read(bytHeader, 0, 4);
-                        if (quickHeaderCheck(bytHeader))
-                        {
-                            totalAudioFrames++;
-                            intPos = nextFrame;
-                        }
-                        else
-                        {
-                            valid = false;
-                        }
-                        posLastAudioFrame = fs.Position - 4; //-4 for last header read
-                    }
-                }
-            }
-
-            fs.Position = posFirstAudioFrame;
-            fs.Read(bytHeader, 0, 4);
-            LoadMP3Header(bytHeader);
-            valid = true;
-        }*/
+        while (!Valid && (fs.Position != fs.Length));
 
         // If the current file stream position is equal to the length, 
         // that means that we've read the entire file and it's not a valid MP3 file
-        if(fs.Position != fs.Length)
+        if(Valid && (fs.Position != fs.Length))
         {
             intPos += 4; //Bypass the 4 byte header
 
             //The following is retrieved from XING SDK //http://www.mp3-tech.org/programmer/decoding.html
-            if(getVersionIndex() == 3)    // MPEG Version 1
+            if (Header.getVersion() == 1.0)         //MPEG Version 1
             {
-                if(getModeIndex() == 3)    // Single Channel
+                if (Header.ChannelModeIndex == 3)   //Single Channel (Mono)
                 {
                     intPos += 17;
                 }
@@ -359,9 +352,9 @@ public class MP3Header
                     intPos += 32;
                 }
             }
-            else                        // MPEG Version 2.0 or 2.5
+            else                                    //MPEG Version 2.0 or 2.5
             {
-                if(getModeIndex() == 3)    // Single Channel
+                if (Header.ChannelModeIndex == 3)   //Single Channel (Mono)
                 {
                     intPos += 9;
                 }
@@ -374,104 +367,34 @@ public class MP3Header
             // Check to see if the MP3 has a variable bitrate
             fs.Position = intPos;
             fs.Read(bytVBitRate,0,12);
-            boolVBitRate = LoadVBRHeader(bytVBitRate);
+            bVBR = LoadVBRHeader(bytVBitRate);
 
             // Once the file's read in, then assign the properties of the file to the public variables
             intBitRate = getBitrate();
-            intFrequency = getFrequency();
-            strMode = getMode();
+            intFrequency = Header.getFrequency();
+            strMode = Header.getChannelMode();
             intLength = getLengthInSeconds();
             strLengthFormatted = getFormattedLength();
+
             fs.Close();
-            return true;
         }
-        return false;
-    }
-
-    //Jeff
-    private bool quickHeaderCheck(byte[] c)
-    {
-        /**
-         * Byte 0 = Frame Sync
-         * Byte 1 (First 3 bits) = Frame Sync
-         * Byte 2 (First 4 bits) = Bitrate
-         **/
-
-        //Make sure Frame Sync is 11111111 111 and bitrate IS NOT 1111
-        if ((c[0] == 0xFF) &&
-            ((c[1] & 0xE0) == 0xE0) &&
-            ((c[2] & 0xF0) != 0xF0))
-        {
-            return headerChecks(c);
-        }
-
-        return false;
-    }
-
-    //Jeff
-    private bool headerChecks(byte[] pHeader)
-    {
-        /**
-         * Header is built like so:
-         * AAAAAAAA AAABBCCD EEEEFFGH IIJJKLMM
-         * BYTE 0   BYTE 1   BYTE 2   BYTE 3
-         * Description of Letters: http://mpgedit.org/mpgedit/mpeg_format/mpeghdr.htm
-         **/
-
-        // get MPEG version [bit 11,12]
-        if( ((pHeader[1] >> 3) & 0x03) == 1 )
-            return false;
-
-        // get MPEG Layer (Listed in reversed order - 00 = reserved, 11 = Layer 1)
-        if ( (3 - ((pHeader[1] >> 1) & 0x03)) == 3)
-            return false;
-
-        // bitrate [bit 16..19]
-        if ( ((pHeader[2] >> 4) & 0x0F) == 0x0F)		// all bits set is reserved
-	        return false;
-
-        // sampling rate [bit 20,21]
-        if ( ((pHeader[2] >> 2) & 0x03) == 0x03)		// all bits set is reserved
-            return false;
-
-        // emphasis [bit 30,31]
-        if ( ((pHeader[3]) & 0x03) == 2)                // bits set are reserved
-	        return false;
-
-        return true;
-    }
-
-    //Jeff
-    private int getPaddingQuick(byte[] pHeader)
-    {
-        return (int)((pHeader[2] >> 1) & 1);
-    }
-
-    private void LoadMP3Header(byte[] c)
-    {
-        // this thing is quite interesting, it works like the following
-        // c[0] = 00000011
-        // c[1] = 00001100
-        // c[2] = 00110000
-        // c[3] = 11000000
-        // the operator << means that we'll move the bits in that direction
-        // 00000011 << 24 = 00000011000000000000000000000000
-        // 00001100 << 16 =         000011000000000000000000
-        // 00110000 << 24 =                 0011000000000000
-        // 11000000       =                         11000000
-        //                +_________________________________
-        //                  00000011000011000011000011000000
-        bithdr = (ulong)(((c[0] & 255) << 24) | ((c[1] & 255) << 16) | ((c[2] & 255) <<  8) | ((c[3] & 255)));
     }
 
     private bool LoadVBRHeader(byte[] inputheader)
     {
         // If it's a variable bitrate MP3, the first 4 bytes will read 'Xing'
         // since they're the ones who added variable bitrate-edness to MP3s
-        if(inputheader[0] == 88 && inputheader[1] == 105 && 
-            inputheader[2] == 110 && inputheader[3] == 103)
+        if((char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
         {
-            int flags = (int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
+            int flags = (int)ID3.expand(inputheader[4], inputheader[5], inputheader[6], inputheader[7]);//(int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
+            
+            /**
+             * Flags:
+             * Frames
+             * Bytes
+             * TOC
+             */
+            
             if((flags & 0x0001) == 1)
             {
                 intVFrames = (int)(((inputheader[8] & 255) << 24) | ((inputheader[9] & 255) << 16) | ((inputheader[10] & 255) <<  8) | ((inputheader[11] & 255)));
@@ -486,155 +409,24 @@ public class MP3Header
         return false;
     }
 
-    private bool IsValidHeader() 
-    {
-        return (((getFrameSync()      & 2047)==2047) &&
-                ((getVersionIndex()   &    3)!=   1) &&
-                ((getLayerIndex()     &    3)!=   0) && 
-                ((getBitrateIndex()   &   15)!=   0) &&
-                ((getBitrateIndex()   &   15)!=  15) &&
-                ((getFrequencyIndex() &    3)!=   3) &&
-                ((getEmphasisIndex()  &    3)!=   2)    );
-    }
-
     //Jeff
     public bool IsVBR()
     {
-        return this.boolVBitRate;
-    }
-
-    private int getFrameSync()     
-    {
-        return (int)((bithdr>>21) & 2047); 
-    }
-
-    private int getVersionIndex()  
-    { 
-        return (int)((bithdr>>19) & 3);  
-    }
-
-    private int getLayerIndex()    
-    { 
-        return (int)((bithdr>>17) & 3);  
-    }
-
-    private int getProtectionBit() 
-    { 
-        return (int)((bithdr>>16) & 1);  
-    }
-
-    private int getBitrateIndex()  
-    { 
-        return (int)((bithdr>>12) & 15); 
-    }
-
-    private int getFrequencyIndex()
-    { 
-        return (int)((bithdr>>10) & 3);  
-    }
-
-    private int getPaddingBit()    
-    { 
-        return (int)((bithdr>>9) & 1);  
-    }
-
-    private int getPrivateBit()    
-    { 
-        return (int)((bithdr>>8) & 1);  
-    }
-
-    private int getModeIndex()     
-    { 
-        return (int)((bithdr>>6) & 3);  
-    }
-
-    private int getModeExtIndex()  
-    { 
-        return (int)((bithdr>>4) & 3);  
-    }
-
-    private int getCoprightBit()   
-    { 
-        return (int)((bithdr>>3) & 1);  
-    }
-
-    private int getOrginalBit()    
-    { 
-        return (int)((bithdr>>2) & 1);  
-    }
-    
-    private int getEmphasisIndex() 
-    { 
-        return (int)(bithdr & 3);  
-    }
-
-    private double getVersion() 
-    {
-        double[] table = {2.5, 0.0, 2.0, 1.0};
-        return table[getVersionIndex()];
-    }
-
-    private int getLayer() 
-    {
-        return (int)(4 - getLayerIndex());
+        return this.bVBR;
     }
 
     private int getBitrate() 
     {
         // If the file has a variable bitrate, then we return an integer average bitrate,
         // otherwise, we use a lookup table to return the bitrate
-        if(boolVBitRate)
+        if(bVBR)
         {
             double medFrameSize = (double)lngFileSize / (double)getNumberOfFrames();
-            return (int)((medFrameSize * (double)getFrequency()) / (1000.0 * ((getLayerIndex()==3) ? 12.0 : 144.0)));
+            return (int)((medFrameSize * (double)Header.getFrequency()) / (1000.0 * ((Header.LayerIndex==3) ? 12.0 : 144.0)));
         }
         else
         {
-            int[,,] table =        {
-                                { // MPEG 2 & 2.5
-                                    {0,  8, 16, 24, 32, 40, 48, 56, 64, 80, 96,112,128,144,160,0}, // Layer III
-                                    {0,  8, 16, 24, 32, 40, 48, 56, 64, 80, 96,112,128,144,160,0}, // Layer II
-                                    {0, 32, 48, 56, 64, 80, 96,112,128,144,160,176,192,224,256,0}  // Layer I
-                                },
-                                { // MPEG 1
-                                    {0, 32, 40, 48, 56, 64, 80, 96,112,128,160,192,224,256,320,0}, // Layer III
-                                    {0, 32, 48, 56, 64, 80, 96,112,128,160,192,224,256,320,384,0}, // Layer II
-                                    {0, 32, 64, 96,128,160,192,224,256,288,320,352,384,416,448,0}  // Layer I
-                                }
-                                };
-
-            return table[getVersionIndex() & 1, getLayerIndex()-1, getBitrateIndex()];
-        }
-    }
-
-    private int getFrequency() 
-    {
-        int[,] table =    {    
-                            {32000, 16000,  8000}, // MPEG 2.5
-                            {    0,     0,     0}, // reserved
-                            {22050, 24000, 16000}, // MPEG 2
-                            {44100, 48000, 32000}  // MPEG 1
-                        };
-
-        return table[getVersionIndex(), getFrequencyIndex()];
-    }
-
-    /// <summary>
-    /// Determine which output mode the song will be played in (Stereo, Join Stereo, Dual Channel, Single Channel).
-    /// </summary>
-    /// <returns>string</returns>
-    private string getMode() 
-    {
-        switch(getModeIndex()) 
-        {
-            default:
-                return "Stereo";
-            case 1:
-                return "Joint Stereo";
-            case 2:
-                return "Dual Channel";
-            case 3:
-                return "Single Channel";
+            return Header.getBitrate();
         }
     }
 
@@ -702,55 +494,64 @@ public class MP3Header
     private int getNumberOfFrames() 
     {
         // Again, the number of MPEG frames is dependant on whether it's a variable bitrate MP3 or not
-        if (!boolVBitRate) 
+        if (!bVBR)
         {
-            double medFrameSize = (double)(((getLayerIndex()==3) ? 12 : 144) *((1000.0 * (float)getBitrate())/(float)getFrequency()));
-            return (int)(lngFileSize/medFrameSize);
+            double medFrameSize = (double)(((Header.LayerIndex == 3) ? 12 : 144) * ((1000.0 * (float)Header.getBitrate()) / (float)Header.getFrequency()));
+            return (int)(lngFileSize / medFrameSize);
         }
-        else 
+        else
+        {
             return intVFrames;
+        }
     }
 
     //Jeff
     public override string ToString()
     {
-        string info =
-            "Reading file: " + this.strFileName + "\n" +
-            "Frequency: " + this.intFrequency.ToString() + "\n" +
-            "Bitrate: " + this.intBitRate.ToString() + "\n" +
-            "Is this VBR Encoded? : " + this.IsVBR().ToString() + "\n" +
-            "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
-            "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
-            String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
-            "Output Mode: " + this.strMode + "\n";
-
-        info += "[ID3v1]\n";
-        if (id3v1.Exists)
+        if (Valid)
         {
-            info += "ID3v1 Version: ID3v1." + id3v1.MajorVersion.ToString() + "\n";
-            info += "Title: " + id3v1.Title + "\n";
-            info += "Artist: " + id3v1.Artist + "\n";
-            info += "Album: " + id3v1.Album + "\n";
+            string info =
+                "Reading file: " + this.strFileName + "\n" +
+                "Frequency: " + this.intFrequency.ToString() + "\n" +
+                "Bitrate: " + this.intBitRate.ToString() + "\n" +
+                "Is this VBR Encoded? : " + this.IsVBR().ToString() + "\n" +
+                "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
+                "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
+                String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
+                "Output Mode: " + this.strMode + "\n";
+
+            info += "[ID3v1]\n";
+            if (id3v1.Exists)
+            {
+                info += "ID3v1 Version: ID3v1." + id3v1.MajorVersion.ToString() + "\n";
+                info += "Title: " + id3v1.Title + "\n";
+                info += "Artist: " + id3v1.Artist + "\n";
+                info += "Album: " + id3v1.Album + "\n";
+            }
+            else
+            {
+                info += "ID3v1 Does Not Exist\n";
+            }
+
+            info += "[ID3v2]\n";
+            if (id3v2.Exists)
+            {
+                info += "ID3v2 Version: ID3v2." + id3v2.MajorVersion.ToString() + "." + id3v2.MinorVersion.ToString() + "\n";
+                info += "Title: " + id3v2.Title + "\n";
+                info += "Artist: " + id3v2.Artist + "\n";
+                info += "Album: " + id3v2.Album + "\n";
+            }
+            else
+            {
+                info += "ID3v2 Does Not Exist\n";
+            }
+
+            return info;
         }
         else
         {
-            info += "ID3v1 Does Not Exist\n";
+            return "Not a valid MP3.";
         }
-
-        info += "[ID3v2]\n";
-        if (id3v2.Exists)
-        {
-            info += "ID3v2 Version: ID3v2." + id3v2.MajorVersion.ToString() + "." + id3v2.MinorVersion.ToString() + "\n";
-            info += "Title: " + id3v2.Title + "\n";
-            info += "Artist: " + id3v2.Artist + "\n";
-            info += "Album: " + id3v2.Album + "\n";
-        }
-        else
-        {
-            info += "ID3v2 Does Not Exist\n";
-        }
-
-        return info;
     }
 
 }
