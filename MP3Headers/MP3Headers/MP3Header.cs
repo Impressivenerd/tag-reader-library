@@ -259,6 +259,8 @@ public class MP3
 
     public ID3v1 id3v1;
     public ID3v2 id3v2;
+    public Lyrics3Tag lyrics3;
+    public APEv2Tag apev2;
 
     public MP3(string FileName)
     {
@@ -292,6 +294,12 @@ public class MP3
         //Read if id3v2 exists
         id3v2 = new ID3v2(fs);
 
+        //Read if lyrics3 exists
+        lyrics3 = new Lyrics3Tag(fs, id3v1.Exists);
+
+        //Read if APEv2 exists
+        apev2 = new APEv2Tag(fs, id3v1, lyrics3, true);
+
         //Pass up the ID3v2 tag (if it exists)
         if (id3v2.Exists)
         {
@@ -302,6 +310,31 @@ public class MP3
             else
             {
                 intPos = (int)id3v2.TagSize + 20; //+20 for header and footer
+            }
+        }
+
+        fs.Position = intPos;
+        fs.Read(bytHeader, 0, 4);
+        MPEGAudioFrame temp = new MPEGAudioFrame(bytHeader);
+        if (temp.Valid == false)
+        {
+            if (Encoding.ASCII.GetString(bytHeader, 0, 3) == "ID3")
+            {
+                //Another ID3v2 Tag?
+                Console.WriteLine("Another ID3v2 tag was found after the initial one");
+                Console.WriteLine();
+            }
+            else if (Encoding.ASCII.GetString(bytHeader, 0, 3) == "APE")
+            {
+                //APETAGEX has appeared before audio data
+                Console.WriteLine("APEv2 Tag Found after ID3v2 tag");
+                Console.WriteLine();
+            }
+            else
+            {
+                //Unknown - Somthing is here that is not supposed to be
+                Console.WriteLine("Garbage found after ID3v2 tag");
+                Console.WriteLine();
             }
         }
 
@@ -377,6 +410,28 @@ public class MP3
             strLengthFormatted = getFormattedLength();
 
             fs.Close();
+        }
+    }
+
+    private void findLastFrame(FileStream fs)
+    {
+        int frames = getNumberOfFrames();
+        int iPos = 0;
+        if (id3v2.Exists)
+        {
+            iPos = id3v2.TagSize;
+        }
+
+        iPos += frames * Header.Size;
+
+        fs.Position = iPos;
+
+        bool forward = true;
+        bool valid = false;
+
+        while (!valid)
+        {
+
         }
     }
 
@@ -1971,3 +2026,179 @@ public class ID3v1 : ID3
 }
 
 #endregion
+
+public class Lyrics3Tag
+{
+    public bool Exists;
+    public int MajorVersion;
+    public int TagSize;
+    public int WholeTagSize;
+
+    public Lyrics3Tag(FileStream fs, bool ID3v1Exists)
+    {
+        Exists = false;
+        MajorVersion = 0;
+
+        //ID3v1 MUST exist for Lyrics3 tag to exist
+        if (ID3v1Exists)
+        {
+            fs.Position = fs.Length - 137;
+
+            byte[] bytLyricsEnd = new byte[9];
+            fs.Read(bytLyricsEnd, 0, 9);
+
+            string Version = Encoding.ASCII.GetString(bytLyricsEnd);
+
+            switch(Version)
+            {
+                case "LYRICSEND": //Lyrics3v1
+                    bool valid = false;
+                    long lngPos = fs.Length - (5100 + 137);
+                    fs.Position = lngPos;
+                    while (!valid && fs.Position <= (fs.Length - 137))
+                    {
+                        byte[] beginTagV1 = new byte[11];
+                        fs.Read(beginTagV1, 0, 11);
+                        if (Encoding.ASCII.GetString(beginTagV1) == "LYRICSBEGIN")
+                        {
+                            valid = true;
+                        }
+                        else
+                        {
+                            lngPos++;
+                            fs.Position = lngPos;
+                        }
+                    }
+
+                    MajorVersion = 1;
+                    Exists = true;
+                    break;
+                case "LYRICS200": //Lyrics3v2
+
+                    //Find Size of Tag (Excluding 6 bytes for size and 9 bytes for end string)
+                    byte[] size = new byte[6];
+                    fs.Position = fs.Length - 143; //137 + 6
+                    fs.Read(size, 0, 6);
+
+                    string strSize = Encoding.ASCII.GetString(size);
+                    TagSize = int.Parse(strSize);
+                    WholeTagSize = TagSize + 15; //6 Bytes for Size; 9 Bytes for LYRICS200
+
+                    //Find Beginning of Tag
+                    fs.Position = fs.Length - (TagSize + 143);
+                    byte[] beginning = new byte[11];
+                    fs.Read(beginning, 0, 11);
+
+                    if (Encoding.ASCII.GetString(beginning) == "LYRICSBEGIN")
+                    {
+                        //OK
+                    }
+
+                    MajorVersion = 2;
+                    Exists = true;
+
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
+
+public class APEv2Tag
+{
+    public bool Valid;
+    public uint TagSize;
+
+    //Flags
+    public bool ReadOnly;
+    public int InformationTypeIndex;
+
+    private byte[] RawHeader;
+    private byte[] RawFooter;
+
+    public APEv2Tag(FileStream fs, ID3v1 id3v1, Lyrics3Tag lyrics3, bool afterAudioData)
+    {
+        Valid = false;
+
+        long lngOffset = 32; //Size of footer tag of APEv2
+        if (id3v1.Exists)
+        {
+            lngOffset += id3v1.TagSize; //128 Bytes for ID3v1
+        }
+        if (lyrics3.Exists)
+        {
+            lngOffset += lyrics3.WholeTagSize;
+        }
+
+        RawFooter = new byte[32];
+        fs.Position = fs.Length - lngOffset;
+        fs.Read(RawFooter, 0, 32);
+
+        if (Encoding.ASCII.GetString(RawFooter, 0, 8) == "APETAGEX")
+        {
+            //Version
+            uint v = ID3.expand(RawFooter[11], RawFooter[10], RawFooter[9], RawFooter[8]);
+
+            TagSize = ID3.expand(RawFooter[15], RawFooter[14], RawFooter[13], RawFooter[12]);
+
+            uint numOfItems = ID3.expand(RawFooter[19], RawFooter[18], RawFooter[17], RawFooter[16]);
+
+            //Detect Header
+            fs.Position = fs.Length - (lngOffset + TagSize);
+            RawHeader = new byte[32];
+            fs.Read(RawHeader, 0, 32);
+            if (Encoding.ASCII.GetString(RawHeader, 0, 8) == "APETAGEX")
+            {
+                //WERE GOOD
+                ProcessFlags();
+            }
+        }
+    }
+
+    private void ProcessFlags()
+    {
+        //Bit 0: 1 = Read Only, 0 = Read/Write
+        ReadOnly = (RawHeader[31] & 0x01) == 0x01;
+
+        /**
+         * Bit 1-2: 
+         * 0: Item contains text information coded in UTF-8
+         * 1: Item contains binary information*
+         * 2: Item is a locator of external stored information**
+         * 3: reserved 
+         **/
+
+        /**
+         *  * Binary information: Information which should not be edited by a text editor, because
+         * * Information is not a text.
+         * * Contains control characters 
+         * * Contains internal restrictions which can't be handled by a normal text editor
+         * * Can't be easily interpreted by humans. 
+         *  ** Allowed formats:
+         * * http://host/directory/filename.ext
+         * * ftp://host/directory/filename.ext
+         * * filename.ext
+         * * /directory/filename.ext
+         * * DRIVE:/directory/filename.ext 
+         * Note: Locators are also UTF-8 encoded. This can especially occur when filenames are encoded. 
+         **/
+        InformationTypeIndex = (int)((RawHeader[31] >> 1) & 0x03);
+        
+        /**
+         * Bit 3-28: Undefined, must be zero 
+         **/
+
+        /**
+         * Bit 29: 0 = This is the footer, not the header, 1 = This is the header, not the footer
+         **/
+
+        /**
+         * Bit 30: 0 = Tag contains a footer, 1= Tag contains no footer 
+         **/
+
+        /**
+         * Bit 31: 0 = Tag contains no header, 1 = Tag contains a header 
+         **/
+    }
+}

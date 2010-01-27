@@ -14,6 +14,7 @@ namespace MP3Headers
             MP3 mp3Test = new MP3("Test.mp3");
             MP3 mp3_cbr = new MP3("Sample CBR.mp3");
             MP3 mp3_vbr = new MP3("Sample VBR.mp3");
+            MP3 lyrics3 = new MP3("Sample Lyrics3v2.mp3");
 
             Console.Write("MP3Headers Demo\n\n");
 
