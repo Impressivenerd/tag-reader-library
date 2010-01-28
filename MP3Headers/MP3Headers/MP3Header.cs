@@ -46,11 +46,16 @@ public class MPEGAudioFrame
 
     public bool Valid;
     public int Size;
-    
 
-    public MPEGAudioFrame(byte[] Header)
+    /// <summary>
+    /// Position in the file.
+    /// </summary>
+    public long Position;
+
+    public MPEGAudioFrame(byte[] Header, long Pos)
     {
         RawHeader = Header;
+        Position = Pos;
 
         Valid = HeaderCheck();
         if (Valid)
@@ -217,6 +222,9 @@ public class MPEGAudioFrame
 
 public class MP3
 {
+    //Max Range - 16384
+    //Min Frame Size - 24 (MPEG2, LayerIII, 8kbps, 24kHz => Framesize = 24 Bytes)
+
     // Public variables for storing the information about the MP3
     public int intBitRate;
     public string strFileName;
@@ -247,9 +255,8 @@ public class MP3
     private int intVFrames;
     
     //Jeff
-    private MPEGAudioFrame Header;
-    private long posFirstAudioFrame;
-    private long posLastAudioFrame;
+    private MPEGAudioFrame firstFrame;
+    private MPEGAudioFrame lastFrame;
     private int totalAudioFrames;
 
     public bool Valid;
@@ -264,6 +271,7 @@ public class MP3
 
     public MP3(string FileName)
     {
+        Console.WriteLine(FileName);
         FileStream fs = new FileStream(FileName, FileMode.Open, FileAccess.Read);
         Valid = false;
 
@@ -315,7 +323,7 @@ public class MP3
 
         fs.Position = intPos;
         fs.Read(bytHeader, 0, 4);
-        MPEGAudioFrame temp = new MPEGAudioFrame(bytHeader);
+        MPEGAudioFrame temp = new MPEGAudioFrame(bytHeader, 0);
         if (temp.Valid == false)
         {
             if (Encoding.ASCII.GetString(bytHeader, 0, 3) == "ID3")
@@ -343,16 +351,16 @@ public class MP3
             fs.Position = intPos;
             fs.Read(bytHeader, 0, 4);
 
-            Header = new MPEGAudioFrame(bytHeader);
-            if (Header.Valid)
+            firstFrame = new MPEGAudioFrame(bytHeader, intPos);
+            if (firstFrame.Valid)
             {
-                nextFrame = intPos + Header.Size;
+                nextFrame = intPos + firstFrame.Size;
                 fs.Position = nextFrame;
+                bytHeader = new byte[4]; //Reset bytHeader array
                 fs.Read(bytHeader, 0, 4);
-                MPEGAudioFrame SecondHeader = new MPEGAudioFrame(bytHeader);
+                MPEGAudioFrame SecondHeader = new MPEGAudioFrame(bytHeader, nextFrame);
                 if (SecondHeader.Valid)
                 {
-                    posFirstAudioFrame = intPos;
                     Valid = true;
                     break;
                 }
@@ -374,9 +382,9 @@ public class MP3
             intPos += 4; //Bypass the 4 byte header
 
             //The following is retrieved from XING SDK //http://www.mp3-tech.org/programmer/decoding.html
-            if (Header.getVersion() == 1.0)         //MPEG Version 1
+            if (firstFrame.getVersion() == 1.0)         //MPEG Version 1
             {
-                if (Header.ChannelModeIndex == 3)   //Single Channel (Mono)
+                if (firstFrame.ChannelModeIndex == 3)   //Single Channel (Mono)
                 {
                     intPos += 17;
                 }
@@ -387,7 +395,7 @@ public class MP3
             }
             else                                    //MPEG Version 2.0 or 2.5
             {
-                if (Header.ChannelModeIndex == 3)   //Single Channel (Mono)
+                if (firstFrame.ChannelModeIndex == 3)   //Single Channel (Mono)
                 {
                     intPos += 9;
                 }
@@ -402,10 +410,13 @@ public class MP3
             fs.Read(bytVBitRate,0,12);
             bVBR = LoadVBRHeader(bytVBitRate);
 
+            // Find the last Audio Frame of the MP3
+            findLastFrame(fs);
+
             // Once the file's read in, then assign the properties of the file to the public variables
             intBitRate = getBitrate();
-            intFrequency = Header.getFrequency();
-            strMode = Header.getChannelMode();
+            intFrequency = firstFrame.getFrequency();
+            strMode = firstFrame.getChannelMode();
             intLength = getLengthInSeconds();
             strLengthFormatted = getFormattedLength();
 
@@ -415,31 +426,103 @@ public class MP3
 
     private void findLastFrame(FileStream fs)
     {
-        int frames = getNumberOfFrames();
-        int iPos = 0;
-        if (id3v2.Exists)
+        long lngOffset = lngFileSize;
+
+        if (apev2.Exists && apev2.Appended)
         {
-            iPos = id3v2.TagSize;
+            lngOffset -= apev2.TagSize;
+        }
+        if (lyrics3.Exists)
+        {
+            lngOffset -= lyrics3.WholeTagSize;
+        }
+        if (id3v1.Exists)
+        {
+            lngOffset -= id3v1.TagSize;
         }
 
-        iPos += frames * Header.Size;
+        long originalPos = lngOffset;
 
-        fs.Position = iPos;
+        fs.Position = lngOffset;
 
         bool forward = true;
         bool valid = false;
 
-        while (!valid)
-        {
+        long nextFrame = 0;
 
+        byte[] tempHeader = new byte[4];
+
+        lngOffset = originalPos;
+
+        MPEGAudioFrame FirstHeader;
+
+        if (!valid)
+        {
+            while (!valid && (fs.Position >= 0) && (lngOffset - originalPos < 16384))
+            {
+                fs.Position = lngOffset;
+                fs.Read(tempHeader, 0, 4);
+
+                FirstHeader = new MPEGAudioFrame(tempHeader, lngOffset);
+                if (FirstHeader.Valid)
+                {
+                    nextFrame = lngOffset + FirstHeader.Size;
+                    fs.Position = nextFrame;
+                    tempHeader = new Byte[4]; //Reset tempHeader
+                    fs.Read(tempHeader, 0, 4);
+                    MPEGAudioFrame SecondHeader = new MPEGAudioFrame(tempHeader, nextFrame);
+                    if (SecondHeader.Valid)
+                    {
+                        //posFirstAudioFrame = intPos;
+                        valid = true;
+                        break;
+                    }
+                    else
+                    {
+                        lastFrame = FirstHeader;
+                        valid = true;
+                        break;
+                    }
+                }
+
+                lngOffset--;
+            }
         }
+
+        /*while (!valid && (fs.Position <= fs.Length))
+        {
+            fs.Position = iPos;
+            fs.Read(tempHeader, 0, 4);
+
+            Header = new MPEGAudioFrame(tempHeader);
+            if (Header.Valid)
+            {
+                nextFrame = iPos + Header.Size;
+                fs.Position = nextFrame;
+                fs.Read(tempHeader, 0, 4);
+                MPEGAudioFrame SecondHeader = new MPEGAudioFrame(tempHeader);
+                if (SecondHeader.Valid)
+                {
+                    //posFirstAudioFrame = intPos;
+                    valid = true;
+                    break;
+                }
+                else
+                {
+                    //The next frame did not appear valid - reset stream position
+                    fs.Position = iPos;
+                }
+            }
+
+            iPos++;
+        }*/
     }
 
     private bool LoadVBRHeader(byte[] inputheader)
     {
         // If it's a variable bitrate MP3, the first 4 bytes will read 'Xing'
         // since they're the ones who added variable bitrate-edness to MP3s
-        if((char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
+        if(Encoding.ASCII.GetString(inputheader, 0, 4) == "Xing") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
         {
             int flags = (int)ID3.expand(inputheader[4], inputheader[5], inputheader[6], inputheader[7]);//(int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
             
@@ -476,45 +559,62 @@ public class MP3
         // otherwise, we use a lookup table to return the bitrate
         if(bVBR)
         {
-            double medFrameSize = (double)lngFileSize / (double)getNumberOfFrames();
-            return (int)((medFrameSize * (double)Header.getFrequency()) / (1000.0 * ((Header.LayerIndex==3) ? 12.0 : 144.0)));
+            //double medFrameSize = (double)lngFileSize / (double)getNumberOfFrames();
+            double medFrameSize = (double)getAudioFileSize() / (double)getNumberOfFrames();
+            return (int)((medFrameSize * (double)firstFrame.getFrequency()) / (1000.0 * ((firstFrame.LayerIndex==3) ? 12.0 : 144.0)));
         }
         else
         {
-            return Header.getBitrate();
+            return firstFrame.getBitrate();
         }
     }
 
     private int getLengthInSeconds() 
     {
+        long intKiloBitFileSize = (long)((8 * getAudioFileSize()) / 1000);
+        return (int) Math.Round( intKiloBitFileSize / (float)getBitrate() );
+    }
+
+    /// <summary>
+    /// Retrieve the filesize (in bytes) without any of the tags.
+    /// </summary>
+    /// <returns></returns>
+    private long getAudioFileSize()
+    {
         // "intKilBitFileSize" made by dividing by 1000 in order to match the "Kilobits/second"
 
-
-        /* TODO: 
-         * Should subtract the size of the ID3v2 Tag AND the ID3v1 Tag (if they 
-         * exist), to get the most accurate size. Also, using Math.Round (which 
-         * is not exactly necessary), will give us a more accurate length of the
-         * song).
-         * 
-         * long curFileSize = lngFileSize;
-         * curFileSize = curFileSize - 116376 - 128; //For ID3v1
-         */
-
-        long curFileSize = lngFileSize;
-
-        if (id3v1.Exists)
+        if (firstFrame.Valid && lastFrame.Valid)
         {
-            //ID3v1 Tag size is 128 bytes
-            curFileSize -= (long)id3v1.TagSize;
+            return (lastFrame.Position + lastFrame.Size) - firstFrame.Position;
         }
-
-        if (id3v2.Exists)
+        else
         {
-            curFileSize -= (long)id3v2.TagSize;
-        }
+            //Less accurate method
+            long curFileSize = lngFileSize;
 
-        long intKiloBitFileSize = (long)((8 * curFileSize) / 1000);
-        return (int) Math.Round( intKiloBitFileSize / (float)getBitrate() );
+            if (id3v1.Exists)
+            {
+                //ID3v1 Tag size is 128 bytes
+                curFileSize -= (long)id3v1.TagSize;
+            }
+
+            if (id3v2.Exists)
+            {
+                curFileSize -= (long)id3v2.TagSize;
+            }
+
+            if (lyrics3.Exists)
+            {
+                curFileSize -= (long)lyrics3.WholeTagSize;
+            }
+
+            if (apev2.Exists)
+            {
+                curFileSize -= (long)apev2.TagSize;
+            }
+
+            return curFileSize;
+        }
     }
 
     /// <summary>
@@ -551,8 +651,9 @@ public class MP3
         // Again, the number of MPEG frames is dependant on whether it's a variable bitrate MP3 or not
         if (!bVBR)
         {
-            double medFrameSize = (double)(((Header.LayerIndex == 3) ? 12 : 144) * ((1000.0 * (float)Header.getBitrate()) / (float)Header.getFrequency()));
-            return (int)(lngFileSize / medFrameSize);
+            double medFrameSize = (double)(((firstFrame.LayerIndex == 3) ? 12 : 144) * ((1000.0 * (float)firstFrame.getBitrate()) / (float)firstFrame.getFrequency()));
+            return (int)(getAudioFileSize() / medFrameSize);
+            //return (int)(lngFileSize / medFrameSize);
         }
         else
         {
@@ -572,7 +673,8 @@ public class MP3
                 "Is this VBR Encoded? : " + this.IsVBR().ToString() + "\n" +
                 "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
                 "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
-                String.Format("Size of the MP3: {0:##.00} MB", (this.lngFileSize / 1024.0 / 1024.0)) + "\n" +
+                String.Format("Size of the MP3: {0:##.00} MB [{1}]", (this.lngFileSize / 1024.0 / 1024.0), this.lngFileSize) + "\n" +
+                String.Format("Size of the MP3 w/o tags: {0:##.00} MB [{1}]", (this.getAudioFileSize() / 1024.0 / 1024.0), this.getAudioFileSize()) + "\n" +
                 "Output Mode: " + this.strMode + "\n";
 
             info += "[ID3v1]\n";
@@ -1219,7 +1321,9 @@ public class ID3v2 : ID3
         }
     }
 
-    public ID3v2(FileStream fs)
+    public ID3v2(FileStream fs) : this(fs, 0) { }
+
+    public ID3v2(FileStream fs, long lngStartOffset)
     {
         //Store FileStreams current position
         long fsOriginalPosition = fs.Position;
@@ -1227,7 +1331,7 @@ public class ID3v2 : ID3
         setDefaultValues();
 
         byte[] bytHeaderID3 = new byte[10];
-        fs.Position = 0;
+        fs.Position = lngStartOffset;
         fs.Read(bytHeaderID3, 0, 10);
 
         //ID3v2.X should start with "ID3"
@@ -1268,7 +1372,7 @@ public class ID3v2 : ID3
                     //Extended Header size, excluding itself; only 6 or 10 bytes (6 if no CRC Data, 10 if CRC Data [4 bytes for CRC])
                     ExtendedHeader.size = (int)ID3.expand(EH_Size[0], EH_Size[1], EH_Size[2], EH_Size[3]);
                     byte[] headerAndData = new byte[4 + ExtendedHeader.size];
-                    fs.Position = 10;
+                    fs.Position = lngStartOffset + 10;
                     fs.Read(headerAndData, 0, headerAndData.Length);
                     ExtendedHeader.setData(headerAndData);
                 }
@@ -1277,7 +1381,7 @@ public class ID3v2 : ID3
                     //Whole Extended Header
                     ExtendedHeader.size = ID3.syncsafe(EH_Size[0], EH_Size[1], EH_Size[2], EH_Size[3]);
                     byte[] headerAndData = new byte[ExtendedHeader.size];
-                    fs.Position = 10;
+                    fs.Position = lngStartOffset + 10;
                     fs.Read(headerAndData, 0, headerAndData.Length);
                     ExtendedHeader.setData(headerAndData);
                 }
@@ -2030,12 +2134,19 @@ public class ID3v1 : ID3
 public class Lyrics3Tag
 {
     public bool Exists;
+    public bool Valid;
+
     public int MajorVersion;
     public int TagSize;
+
+    /// <summary>
+    /// Represents the TagSize + 15 bytes (6 bytes for size, 9 bytes for end string)
+    /// </summary>
     public int WholeTagSize;
 
     public Lyrics3Tag(FileStream fs, bool ID3v1Exists)
     {
+        Valid = false;
         Exists = false;
         MajorVersion = 0;
 
@@ -2052,16 +2163,15 @@ public class Lyrics3Tag
             switch(Version)
             {
                 case "LYRICSEND": //Lyrics3v1
-                    bool valid = false;
                     long lngPos = fs.Length - (5100 + 137);
                     fs.Position = lngPos;
-                    while (!valid && fs.Position <= (fs.Length - 137))
+                    while (!Valid && fs.Position <= (fs.Length - 137))
                     {
                         byte[] beginTagV1 = new byte[11];
                         fs.Read(beginTagV1, 0, 11);
                         if (Encoding.ASCII.GetString(beginTagV1) == "LYRICSBEGIN")
                         {
-                            valid = true;
+                            Valid = true;
                         }
                         else
                         {
@@ -2092,6 +2202,7 @@ public class Lyrics3Tag
                     if (Encoding.ASCII.GetString(beginning) == "LYRICSBEGIN")
                     {
                         //OK
+                        Valid = true;
                     }
 
                     MajorVersion = 2;
@@ -2107,8 +2218,14 @@ public class Lyrics3Tag
 
 public class APEv2Tag
 {
+    public bool Exists;
     public bool Valid;
     public uint TagSize;
+
+    /// <summary>
+    /// Tag exists AFTER the audio data.
+    /// </summary>
+    public bool Appended;
 
     //Flags
     public bool ReadOnly;
@@ -2119,6 +2236,8 @@ public class APEv2Tag
 
     public APEv2Tag(FileStream fs, ID3v1 id3v1, Lyrics3Tag lyrics3, bool afterAudioData)
     {
+        Appended = false;
+        Exists = false;
         Valid = false;
 
         long lngOffset = 32; //Size of footer tag of APEv2
@@ -2137,6 +2256,9 @@ public class APEv2Tag
 
         if (Encoding.ASCII.GetString(RawFooter, 0, 8) == "APETAGEX")
         {
+            Exists = true;
+            Appended = true;
+
             //Version
             uint v = ID3.expand(RawFooter[11], RawFooter[10], RawFooter[9], RawFooter[8]);
 

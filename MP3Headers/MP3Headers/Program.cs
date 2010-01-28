@@ -18,13 +18,22 @@ namespace MP3Headers
 
             Console.Write("MP3Headers Demo\n\n");
 
+            Console.WriteLine(mp3EHText.ToString());
+            Console.WriteLine();
+
             Console.WriteLine(mp3_id324.ToString());
+            Console.WriteLine();
+
+            Console.WriteLine(mp3Test.ToString());
             Console.WriteLine();
 
             Console.WriteLine(mp3_cbr.ToString());
             Console.WriteLine();
 
             Console.WriteLine(mp3_vbr.ToString());
+            Console.WriteLine();
+
+            Console.WriteLine(lyrics3.ToString());
 
             Console.Write("\nPress any key to continue...");
             Console.ReadKey();
