@@ -45,7 +45,7 @@ public class MPEGAudioFrame
     public int EmphasisIndex;      //M
 
     public bool Valid;
-    public int Size;
+    public int FrameSize;
 
     /// <summary>
     /// Position in the file.
@@ -129,11 +129,11 @@ public class MPEGAudioFrame
         int Padding = (PaddingBit) ? 1 : 0;
         if (getLayer() == 1)
         {
-            Size = (12 * (getBitrate() * 1000) / getFrequency() + Padding) * 4;
+            FrameSize = (12 * (getBitrate() * 1000) / getFrequency() + Padding) * 4;
         }
         else
         {
-            Size = 144 * (getBitrate() * 1000) / getFrequency() + Padding;
+            FrameSize = 144 * (getBitrate() * 1000) / getFrequency() + Padding;
         }
     }
 
@@ -354,7 +354,7 @@ public class MP3
             firstFrame = new MPEGAudioFrame(bytHeader, intPos);
             if (firstFrame.Valid)
             {
-                nextFrame = intPos + firstFrame.Size;
+                nextFrame = intPos + firstFrame.FrameSize;
                 fs.Position = nextFrame;
                 bytHeader = new byte[4]; //Reset bytHeader array
                 fs.Read(bytHeader, 0, 4);
@@ -434,7 +434,7 @@ public class MP3
         }
         if (lyrics3.Exists)
         {
-            lngOffset -= lyrics3.WholeTagSize;
+            lngOffset -= lyrics3.TagSize;
         }
         if (id3v1.Exists)
         {
@@ -466,7 +466,7 @@ public class MP3
                 FirstHeader = new MPEGAudioFrame(tempHeader, lngOffset);
                 if (FirstHeader.Valid)
                 {
-                    nextFrame = lngOffset + FirstHeader.Size;
+                    nextFrame = lngOffset + FirstHeader.FrameSize;
                     fs.Position = nextFrame;
                     tempHeader = new Byte[4]; //Reset tempHeader
                     fs.Read(tempHeader, 0, 4);
@@ -585,7 +585,7 @@ public class MP3
 
         if (firstFrame.Valid && lastFrame.Valid)
         {
-            return (lastFrame.Position + lastFrame.Size) - firstFrame.Position;
+            return (lastFrame.Position + lastFrame.FrameSize) - firstFrame.Position;
         }
         else
         {
@@ -605,7 +605,7 @@ public class MP3
 
             if (lyrics3.Exists)
             {
-                curFileSize -= (long)lyrics3.WholeTagSize;
+                curFileSize -= (long)lyrics3.TagSize;
             }
 
             if (apev2.Exists)
@@ -661,7 +661,23 @@ public class MP3
         }
     }
 
-    //Jeff
+    public void Save(string FileName)
+    {
+        FileStream nFS = File.Create("TEST OUTPUT.mp3");
+        if (id3v1.Exists)
+        {
+            nFS.Write(id3v1.ToByte(), 0, id3v1.ToByte().Length);
+        }
+        Console.WriteLine("[BEGIN WRITE]");
+        Console.WriteLine("Writing ID3v2 Tag (if enabled).");
+        Console.WriteLine("Writing MPEG Audio");
+        Console.WriteLine("Writing APE Tag (if enabled).");
+        Console.WriteLine("Writing Lyrics3 Tag (if enbaled & ID3v1 enabled).");
+        Console.WriteLine("Writing ID3v1 Tag (if enabled).");
+        Console.WriteLine("[END WRITE]");
+        nFS.Close();
+    }
+
     public override string ToString()
     {
         if (Valid)
@@ -715,7 +731,7 @@ public class MP3
 
 #region ID3 Tag Information
 
-public class ID3
+public abstract class ID3 : Tag
 {
     public string Title;
     public string Artist;
@@ -725,11 +741,6 @@ public class ID3
     public string Genre;
     public int Track;
     public int GenreID;
-    public bool Exists;
-    public int TagSize;
-
-    public int MajorVersion;
-    public int MinorVersion;
 
     //Faster Implementation Only - 4 Bytes
     public static int syncsafe(byte byt1, byte byt2, byte byt3, byte byt4)
@@ -1352,7 +1363,7 @@ public class ID3v2 : ID3
 
 
             //Max size for tag size = 2^28 = 268435456 bytes = 256MB; int.MaxValue = 2147483647 bytes = 2048MB
-            TagSize = ID3.syncsafe(bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]); //(int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
+            TagSize = (uint)ID3.syncsafe(bytHeaderID3[6], bytHeaderID3[7], bytHeaderID3[8], bytHeaderID3[9]); //(int)((bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9]);
             
             //Console.WriteLine("Len (Bytes): {0:D}", (ulong)( (bytHeaderID3[6] << 21) | (bytHeaderID3[7] << 14) | (bytHeaderID3[8] << 7) | bytHeaderID3[9] ));
             //Console.WriteLine("NUMBER: {0:D}", (ulong)( (0x00<<21) | (0x00<<14) | (0x02<<7) | (0x01) ));
@@ -1596,6 +1607,12 @@ public class ID3v2 : ID3
         }
 
         return null;
+    }
+
+    public override byte[] ToByte()
+    {
+        //Setup Encoding Here For Write Method
+        return new byte[0];
     }
 }
 
@@ -2127,22 +2144,111 @@ public class ID3v1 : ID3
 
         fs.Position = fsOriginalPosition;
     }
+
+    public override byte[] ToByte()
+    {
+        //Setup Encoding Here For Write Method
+        byte[] id3tag = new byte[128];
+        int ArrayOffset = 0;
+        int ItemLen = 0; //Used to keep track of the current items length
+
+        ASCIIEncoding ascii = new ASCIIEncoding();
+        ascii.GetBytes("TAG").CopyTo(id3tag, 0);
+        ArrayOffset += 3;
+        
+        //Title: Max Length = 30
+        ItemLen = 0;
+        ItemLen = (Title.Length <= 30) ? Title.Length : 30;
+        ascii.GetBytes(Title.ToCharArray(0, ItemLen)).CopyTo(id3tag, ArrayOffset);
+        ArrayOffset += ItemLen;
+        
+        //[PADDING] ArrayOffset should be at 33 by this point
+        if (ArrayOffset < 33) 
+        {
+            for (; ArrayOffset < 33; ++ArrayOffset)
+            {
+                id3tag[ArrayOffset] = 0x00;
+            }
+        }
+
+        //Artist: Max Length = 30
+        ItemLen = 0;
+        ItemLen = (Artist.Length <= 30) ? Artist.Length : 30;
+        ascii.GetBytes(Artist.ToCharArray(0, ItemLen)).CopyTo(id3tag, ArrayOffset);
+        ArrayOffset += ItemLen;
+
+        if (ArrayOffset < 63)
+        {
+            for (; ArrayOffset < 63; ++ArrayOffset)
+            {
+                id3tag[ArrayOffset] = 0x00;
+            }
+        }
+
+        //Album: Max Length = 30
+        ItemLen = 0;
+        ItemLen = (Album.Length <= 30) ? Album.Length : 30;
+        ascii.GetBytes(Album.ToCharArray(0, ItemLen)).CopyTo(id3tag, ArrayOffset);
+        ArrayOffset += ItemLen;
+
+        if (ArrayOffset < 93)
+        {
+            for (; ArrayOffset < 93; ++ArrayOffset)
+            {
+                id3tag[ArrayOffset] = 0x00;
+            }
+        }
+
+        //Year: Max Length = 4
+        ItemLen = 0;
+        ItemLen = (Year.Length <= 4) ? Year.Length : 4;
+        ascii.GetBytes(Year.ToCharArray(0, ItemLen)).CopyTo(id3tag, ArrayOffset);
+        ArrayOffset += ItemLen;
+
+        if (ArrayOffset < 97)
+        {
+            for (; ArrayOffset < 97; ++ArrayOffset)
+            {
+                id3tag[ArrayOffset] = 0x00;
+            }
+        }
+
+        //Comment: Max Length = 30 (29 if v1.1)
+        ItemLen = 0;
+        ItemLen = (Comment.Length <= 30) ? Comment.Length : 30;
+        ascii.GetBytes(Comment.ToCharArray(0, ItemLen)).CopyTo(id3tag, ArrayOffset);
+        ArrayOffset += ItemLen;
+
+        if (ArrayOffset < 127)
+        {
+            for (; ArrayOffset < 127; ++ArrayOffset)
+            {
+                id3tag[ArrayOffset] = 0x00;
+            }
+        }
+
+        //Track: Max Length = 1
+        if (Track != 0)
+        {
+            id3tag[ArrayOffset - 1] = (byte)Track;
+        }
+        else
+        {
+            id3tag[ArrayOffset - 1] = 0x00;
+        }
+
+        //Genre: Max Length = 1
+        id3tag[ArrayOffset] = (byte)GenreID;
+        
+        return id3tag;
+    }
 }
 
 #endregion
 
-public class Lyrics3Tag
+public class Lyrics3Tag : Tag
 {
-    public bool Exists;
     public bool Valid;
-
-    public int MajorVersion;
-    public int TagSize;
-
-    /// <summary>
-    /// Represents the TagSize + 15 bytes (6 bytes for size, 9 bytes for end string)
-    /// </summary>
-    public int WholeTagSize;
 
     public Lyrics3Tag(FileStream fs, bool ID3v1Exists)
     {
@@ -2191,8 +2297,8 @@ public class Lyrics3Tag
                     fs.Read(size, 0, 6);
 
                     string strSize = Encoding.ASCII.GetString(size);
-                    TagSize = int.Parse(strSize);
-                    WholeTagSize = TagSize + 15; //6 Bytes for Size; 9 Bytes for LYRICS200
+                    _TagSize = uint.Parse(strSize);
+                    TagSize = TagSize + 15; //6 Bytes for Size; 9 Bytes for LYRICS200
 
                     //Find Beginning of Tag
                     fs.Position = fs.Length - (TagSize + 143);
@@ -2214,13 +2320,17 @@ public class Lyrics3Tag
             }
         }
     }
+
+    public override byte[] ToByte()
+    {
+        //Setup Encoding Here For Write Method
+        return new byte[0];
+    }
 }
 
-public class APEv2Tag
+public class APEv2Tag : Tag
 {
-    public bool Exists;
     public bool Valid;
-    public uint TagSize;
 
     /// <summary>
     /// Tag exists AFTER the audio data.
@@ -2247,7 +2357,7 @@ public class APEv2Tag
         }
         if (lyrics3.Exists)
         {
-            lngOffset += lyrics3.WholeTagSize;
+            lngOffset += lyrics3.TagSize;
         }
 
         RawFooter = new byte[32];
@@ -2323,4 +2433,34 @@ public class APEv2Tag
          * Bit 31: 0 = Tag contains no header, 1 = Tag contains a header 
          **/
     }
+
+    public override byte[] ToByte()
+    {
+        //Setup Encoding Here For Write Method
+        return new byte[0];
+    }
+}
+
+public abstract class Tag
+{
+    /// <summary>
+    /// Fully Inclusive Tag Size
+    /// </summary>
+    public uint TagSize = 0;
+    /// <summary>
+    /// Internally Reported TagSize
+    /// </summary>
+    protected uint _TagSize = 0;
+
+    public int MajorVersion = 0;
+    public int MinorVersion= 0;
+    public long Position = 0;
+    public bool Exists = false;
+
+    /// <summary>
+    /// Is this tag enabled? (used in MP3 Write() method)
+    /// </summary>
+    public bool Enabled = true;
+
+    public abstract byte[] ToByte();
 }
