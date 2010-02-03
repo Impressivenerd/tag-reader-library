@@ -264,8 +264,8 @@ public class MP3
     //private bool id3v1; //Temporarily to determine if id3v1 is present
     //private bool id3v2; //Temporarily to determine if id3v2 is present
 
-    public ID3v1 id3v1;
-    public ID3v2 id3v2;
+    public ID3v1Tag id3v1;
+    public ID3v2Tag id3v2;
     public Lyrics3Tag lyrics3;
     public APEv2Tag apev2;
 
@@ -297,10 +297,10 @@ public class MP3
         int nextFrame = 0;  //Jeff - Location in stream to next Frame (current position + framesize)
 
         //Read if id3v1 exists
-        id3v1 = new ID3v1(fs);
+        id3v1 = new ID3v1Tag(fs);
 
         //Read if id3v2 exists
-        id3v2 = new ID3v2(fs);
+        id3v2 = new ID3v2Tag(fs);
 
         //Read if lyrics3 exists
         lyrics3 = new Lyrics3Tag(fs, id3v1.Exists);
@@ -522,7 +522,7 @@ public class MP3
     {
         // If it's a variable bitrate MP3, the first 4 bytes will read 'Xing'
         // since they're the ones who added variable bitrate-edness to MP3s
-        if(Encoding.ASCII.GetString(inputheader, 0, 4) == "Xing") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
+        if(Encoding.ASCII.GetString(inputheader, 0, 4) == "Xing")//|| Encoding.ASCII.GetString(inputheader, 0, 4) == "Info") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
         {
             int flags = (int)ID3.expand(inputheader[4], inputheader[5], inputheader[6], inputheader[7]);//(int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
             
@@ -532,10 +532,15 @@ public class MP3
              * Bytes
              * TOC
              */
+
+            bool framesFlag = ((flags & 0x01) == 0x01);     // total bit stream frames from Xing header data
+            bool bytesFlag = ((flags & 0x02) == 0x02);      // total bit stream bytes from Xing header data
+            bool tocFlag = ((flags & 0x04) == 0x04);
+            bool vbrScaleFlag = ((flags & 0x08) == 0x08);   // encoded vbr scale from Xing header data
             
-            if((flags & 0x0001) == 1)
+            if(framesFlag)
             {
-                intVFrames = (int)(((inputheader[8] & 255) << 24) | ((inputheader[9] & 255) << 16) | ((inputheader[10] & 255) <<  8) | ((inputheader[11] & 255)));
+                intVFrames = (int)ID3.expand(inputheader[8], inputheader[9], inputheader[10], inputheader[11]);//(int)(((inputheader[8] & 255) << 24) | ((inputheader[9] & 255) << 16) | ((inputheader[10] & 255) <<  8) | ((inputheader[11] & 255)));
                 return true;
             }
             else
@@ -571,6 +576,7 @@ public class MP3
 
     private int getLengthInSeconds() 
     {
+        // "intKilBitFileSize" made by dividing by 1000 in order to match the "Kilobits/second"
         long intKiloBitFileSize = (long)((8 * getAudioFileSize()) / 1000);
         return (int) Math.Round( intKiloBitFileSize / (float)getBitrate() );
     }
@@ -581,8 +587,6 @@ public class MP3
     /// <returns></returns>
     private long getAudioFileSize()
     {
-        // "intKilBitFileSize" made by dividing by 1000 in order to match the "Kilobits/second"
-
         if (firstFrame.Valid && lastFrame.Valid)
         {
             return (lastFrame.Position + lastFrame.FrameSize) - firstFrame.Position;
@@ -663,11 +667,46 @@ public class MP3
 
     public void Save(string FileName)
     {
+        DateTime start = DateTime.Now;
+
+        FileStream file = File.OpenRead(this.strFileName);
+        
         FileStream nFS = File.Create("TEST OUTPUT.mp3");
+
+        file.Position = firstFrame.Position;
+        
+        int b;
+        long lastPos = lastFrame.Position + lastFrame.FrameSize;
+        long curPos = file.Position;
+        /*while ((b = file.ReadByte()) > -1)
+        {
+            curPos++;
+            nFS.WriteByte((byte)b);
+            if (curPos >= lastPos)
+            {
+                break;
+            }
+        }
+        nFS.Flush();*/
+
+        /*byte[] testread = new byte[(lastFrame.Position + lastFrame.FrameSize) - firstFrame.Position];
+        file.Read(testread, 0, testread.Length);
+        nFS.Write(testread, 0, testread.Length);
+        nFS.Flush();*/
+        
+        /**
+         * If filesize > MAX_ALLOWED_LENGTH then
+         *   Copy byte by byte
+         * else
+         *   Copy entire MP3 into memory and write out
+         **/
+
         if (id3v1.Exists)
         {
             nFS.Write(id3v1.ToByte(), 0, id3v1.ToByte().Length);
         }
+        nFS.Flush();
+
         Console.WriteLine("[BEGIN WRITE]");
         Console.WriteLine("Writing ID3v2 Tag (if enabled).");
         Console.WriteLine("Writing MPEG Audio");
@@ -676,6 +715,9 @@ public class MP3
         Console.WriteLine("Writing ID3v1 Tag (if enabled).");
         Console.WriteLine("[END WRITE]");
         nFS.Close();
+
+        TimeSpan tTime = DateTime.Now - start;
+        Console.WriteLine("SAVING TOOK: " + tTime.TotalMilliseconds);
     }
 
     public override string ToString()
@@ -1263,7 +1305,7 @@ public class ID3v2ExtendedHeader
     }
 }
 
-public class ID3v2 : ID3
+public class ID3v2Tag : ID3
 {
     public bool AllFramesUnsynced;
     public bool Compression; //ID3v2.2 ONLY
@@ -1279,7 +1321,7 @@ public class ID3v2 : ID3
 
     public Dictionary<string, List<ID3v2Frame>> Frames;
 
-    public ID3v2()
+    public ID3v2Tag()
     {
         setDefaultValues();
     }
@@ -1332,9 +1374,9 @@ public class ID3v2 : ID3
         }
     }
 
-    public ID3v2(FileStream fs) : this(fs, 0) { }
+    public ID3v2Tag(FileStream fs) : this(fs, 0) { }
 
-    public ID3v2(FileStream fs, long lngStartOffset)
+    public ID3v2Tag(FileStream fs, long lngStartOffset)
     {
         //Store FileStreams current position
         long fsOriginalPosition = fs.Position;
@@ -1348,6 +1390,8 @@ public class ID3v2 : ID3
         //ID3v2.X should start with "ID3"
         if ((char)bytHeaderID3[0] == 'I' && (char)bytHeaderID3[1] == 'D' && (char)bytHeaderID3[2] == '3')
         {
+            Position = lngStartOffset;
+
             //Major and Minor Versions should NOT be 0xFF
             MajorVersion = (bytHeaderID3[3] != 0xFF) ? (int)bytHeaderID3[3] : 0;
             MinorVersion = (bytHeaderID3[4] != 0xFF) ? (int)bytHeaderID3[4] : 0;
@@ -2013,9 +2057,9 @@ public class ID3v2APICFrame
     }
 }
 
-public class ID3v1 : ID3
+public class ID3v1Tag : ID3
 {
-    public ID3v1()
+    public ID3v1Tag()
     {
         MajorVersion = 0;
         MinorVersion = 0; //Never Changes for ID3v1
@@ -2035,7 +2079,7 @@ public class ID3v1 : ID3
         TagSize = 128;
     }
 
-    public ID3v1(FileStream fs)
+    public ID3v1Tag(FileStream fs)
     {
         /************
          * Defaults
@@ -2063,6 +2107,8 @@ public class ID3v1 : ID3
         //ID3v1.X Should begin with "TAG"
         if ((char)bytHeaderTAG[0] == 'T' && (char)bytHeaderTAG[1] == 'A' && (char)bytHeaderTAG[2] == 'G')
         {
+            Position = fs.Position - 128;
+
             //Title
             for (int i = 3; i <= 32; ++i)
             {
@@ -2278,6 +2324,7 @@ public class Lyrics3Tag : Tag
                         if (Encoding.ASCII.GetString(beginTagV1) == "LYRICSBEGIN")
                         {
                             Valid = true;
+                            Position = fs.Position - 11;
                         }
                         else
                         {
@@ -2293,15 +2340,15 @@ public class Lyrics3Tag : Tag
 
                     //Find Size of Tag (Excluding 6 bytes for size and 9 bytes for end string)
                     byte[] size = new byte[6];
-                    fs.Position = fs.Length - 143; //137 + 6
+                    fs.Position = fs.Length - 143; //128 [ID3v1] + 9 [LYRICS200] + 6 [SIZE]
                     fs.Read(size, 0, 6);
 
                     string strSize = Encoding.ASCII.GetString(size);
-                    _TagSize = uint.Parse(strSize);
-                    TagSize = TagSize + 15; //6 Bytes for Size; 9 Bytes for LYRICS200
+                    _ReportedTagSize = uint.Parse(strSize);
+                    TagSize = _ReportedTagSize + 15; //6 Bytes for Size; 9 Bytes for LYRICS200
 
                     //Find Beginning of Tag
-                    fs.Position = fs.Length - (TagSize + 143);
+                    fs.Position = fs.Length - (_ReportedTagSize + 143);
                     byte[] beginning = new byte[11];
                     fs.Read(beginning, 0, 11);
 
@@ -2309,6 +2356,7 @@ public class Lyrics3Tag : Tag
                     {
                         //OK
                         Valid = true;
+                        Position = fs.Position - 11;
                     }
 
                     MajorVersion = 2;
@@ -2344,7 +2392,7 @@ public class APEv2Tag : Tag
     private byte[] RawHeader;
     private byte[] RawFooter;
 
-    public APEv2Tag(FileStream fs, ID3v1 id3v1, Lyrics3Tag lyrics3, bool afterAudioData)
+    public APEv2Tag(FileStream fs, ID3v1Tag id3v1, Lyrics3Tag lyrics3, bool afterAudioData)
     {
         Appended = false;
         Exists = false;
@@ -2450,7 +2498,7 @@ public abstract class Tag
     /// <summary>
     /// Internally Reported TagSize
     /// </summary>
-    protected uint _TagSize = 0;
+    protected uint _ReportedTagSize = 0;
 
     public int MajorVersion = 0;
     public int MinorVersion= 0;
