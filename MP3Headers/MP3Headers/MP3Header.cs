@@ -220,6 +220,154 @@ public class MPEGAudioFrame
     }
 }
 
+public class VBRHeader
+{
+    //VBRHeader Properties
+    public bool bVBR = false;
+    public bool Exists = false;
+    public string VBRType = "";
+
+    //Flags
+    bool framesFlag = false;
+    bool bytesFlag = false;
+    bool tocFlag = false;
+    bool vbrScaleFlag = false;
+
+    public byte[] TOC;
+    public int file_bytes;
+
+    public int intVFrames;
+
+    public int HeaderSize;
+
+    public long Position;
+
+    public VBRHeader(FileStream fs, long startOffset)
+    {
+        fs.Position = startOffset;
+        byte[] inputheader = new byte[8]; //4 for Xing or Info, 4 for flags
+        fs.Read(inputheader, 0, 8);
+
+        // If it's a variable bitrate MP3, the first 4 bytes will read 'Xing'
+        // since they're the ones who added variable bitrate-edness to MP3s
+        string HeaderType = Encoding.ASCII.GetString(inputheader, 0, 4);
+        if (HeaderType == "Xing" || HeaderType == "Info") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
+        {
+            VBRType = HeaderType;
+            Exists = true;
+            Position = startOffset;
+
+            int flags = (int)ID3.expand(inputheader[4], inputheader[5], inputheader[6], inputheader[7]);//(int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
+
+            /**
+             * Flags:
+             * Frames
+             * Bytes
+             * TOC
+             * Scale
+             */
+
+            framesFlag = ((flags & 0x01) == 0x01);     // total bit stream frames from Xing header data
+            bytesFlag = ((flags & 0x02) == 0x02);      // total bit stream bytes from Xing header data
+            tocFlag = ((flags & 0x04) == 0x04);
+            vbrScaleFlag = ((flags & 0x08) == 0x08);   // encoded vbr scale from Xing header data
+
+            int byteCount = 0;
+            if (framesFlag) byteCount += 4;
+            if (bytesFlag) byteCount += 4;
+            if (tocFlag) byteCount += 100;
+            if (vbrScaleFlag) byteCount += 4;
+
+            byte[] inputheaderData = new byte[byteCount];
+            fs.Read(inputheaderData, 0, byteCount);
+
+
+            int pos = 0;
+            if (framesFlag)
+            {
+                intVFrames = (int)ID3.expand(inputheaderData[pos], inputheaderData[pos + 1], inputheaderData[pos + 2], inputheaderData[pos+3]);//(int)(((inputheader[8] & 255) << 24) | ((inputheader[9] & 255) << 16) | ((inputheader[10] & 255) <<  8) | ((inputheader[11] & 255)));
+                pos += 4;
+            }
+            else
+            {
+                intVFrames = -1;
+            }
+
+            if (bytesFlag)
+            {
+                file_bytes = (int)ID3.expand(inputheaderData[pos], inputheaderData[pos + 1], inputheaderData[pos + 2], inputheaderData[pos+3]);
+                pos += 4;
+            }
+
+            if (tocFlag)
+            {
+                TOC = new byte[100];
+                for (int i = 0; i < 100; ++i)
+                {
+                    TOC[i] = inputheaderData[pos];
+                    pos++;
+                }
+            }
+
+            int vbrScale = -1;
+            if (vbrScaleFlag)
+            {
+                vbrScale = (int)ID3.expand(inputheaderData[pos], inputheaderData[pos + 1], inputheaderData[pos + 2], inputheaderData[pos + 3]);
+                pos += 4;
+            }
+
+            HeaderSize = pos + 8; //+8 for original 8 bytes ["Xing" + Flags]
+
+            if (HeaderType == "Xing")
+            {
+                //VBR Indeed
+                bVBR = true;
+
+                SeekPoint(100);
+            }
+            else
+            {
+                //Header is 'Info' which means CBR
+                bVBR = false;
+            }
+        }
+    }
+
+    public long SeekPoint(double Percent)
+    {
+        // interpolate in TOC to get file seek point in bytes
+        int iPercent;
+        long seekPointInBytes;
+        double fa, fb, fx; //interpolation variables
+
+
+        if (Percent < 0.0) Percent = 0.0;
+        if (Percent > 100.0) Percent = 100.0;
+
+        iPercent = (int)Percent;
+
+        if (iPercent > 99) iPercent = 99;
+
+        fa = TOC[iPercent];
+        if (iPercent < 99)
+        {
+            fb = TOC[iPercent + 1];
+        }
+        else
+        {
+            fb = 256.0;
+        }
+
+        //Interpolation Algorithm [Interpoloate Access Position]
+        fx = fa + (fb - fa) * (Percent - iPercent);
+
+        seekPointInBytes = (long)((1.0 / 256.0) * fx * file_bytes);
+
+
+        return seekPointInBytes;
+    }
+}
+
 public class MP3
 {
     //Max Range - 16384
@@ -251,13 +399,25 @@ public class MP3
     public string strLengthFormatted;
 
     // Private variables used in the process of reading in the MP3 files
-    private bool bVBR;
-    private int intVFrames;
+    private int intVFrames
+    {
+        get
+        {
+            if (vbrFrameInfo != null)
+            {
+                return vbrFrameInfo.intVFrames;
+            }
+            else
+            {
+                return -1;
+            }
+        }
+    }
     
     //Jeff
     private MPEGAudioFrame firstFrame;
     private MPEGAudioFrame lastFrame;
-    private int totalAudioFrames;
+    private VBRHeader vbrFrameInfo;
 
     public bool Valid;
 
@@ -346,6 +506,42 @@ public class MP3
             }
         }
 
+        //Search Backwards (Max Search 16384)
+        int intPosPrev = intPos;
+        int maxPos = intPos - 16384;
+        if (maxPos < 0) maxPos = 0;
+        do
+        {
+            fs.Position = intPos;
+            fs.Read(bytHeader, 0, 4);
+
+            firstFrame = new MPEGAudioFrame(bytHeader, intPos);
+            if (firstFrame.Valid)
+            {
+                nextFrame = intPos + firstFrame.FrameSize;
+                fs.Position = nextFrame;
+                bytHeader = new byte[4]; //Reset bytHeader array
+                fs.Read(bytHeader, 0, 4);
+                MPEGAudioFrame SecondHeader = new MPEGAudioFrame(bytHeader, nextFrame);
+                if (SecondHeader.Valid)
+                {
+                    Valid = true;
+                    break;
+                }
+                else
+                {
+                    //The next frame did not appear valid - reset stream position
+                    fs.Position = intPos;
+                }
+            }
+
+            intPos--;
+
+        } while (!Valid && (fs.Position >= maxPos) && intPos >= 0);
+
+        if (!Valid) intPos = intPosPrev;
+
+        //Search Forwards
         do
         {
             fs.Position = intPos;
@@ -406,9 +602,11 @@ public class MP3
             }
             
             // Check to see if the MP3 has a variable bitrate
+            
             fs.Position = intPos;
-            fs.Read(bytVBitRate,0,12);
-            bVBR = LoadVBRHeader(bytVBitRate);
+            //fs.Read(bytVBitRate,0,12);
+            //bVBR = LoadVBRHeader(bytVBitRate);
+            vbrFrameInfo = new VBRHeader(fs, (long)intPos);
 
             // Find the last Audio Frame of the MP3
             findLastFrame(fs);
@@ -518,21 +716,21 @@ public class MP3
         }*/
     }
 
-    private bool LoadVBRHeader(byte[] inputheader)
+    /*private bool LoadVBRHeader(byte[] inputheader)
     {
         // If it's a variable bitrate MP3, the first 4 bytes will read 'Xing'
         // since they're the ones who added variable bitrate-edness to MP3s
-        if(Encoding.ASCII.GetString(inputheader, 0, 4) == "Xing")//|| Encoding.ASCII.GetString(inputheader, 0, 4) == "Info") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
+        string HeaderType = Encoding.ASCII.GetString(inputheader, 0, 4);
+        if(HeaderType == "Xing" || HeaderType == "Info") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
         {
             int flags = (int)ID3.expand(inputheader[4], inputheader[5], inputheader[6], inputheader[7]);//(int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
             
-            /**
-             * Flags:
-             * Frames
-             * Bytes
-             * TOC
-             */
-
+            
+            //Flags:
+            //Frames
+            //Bytes
+            //TOC
+            
             bool framesFlag = ((flags & 0x01) == 0x01);     // total bit stream frames from Xing header data
             bool bytesFlag = ((flags & 0x02) == 0x02);      // total bit stream bytes from Xing header data
             bool tocFlag = ((flags & 0x04) == 0x04);
@@ -541,28 +739,37 @@ public class MP3
             if(framesFlag)
             {
                 intVFrames = (int)ID3.expand(inputheader[8], inputheader[9], inputheader[10], inputheader[11]);//(int)(((inputheader[8] & 255) << 24) | ((inputheader[9] & 255) << 16) | ((inputheader[10] & 255) <<  8) | ((inputheader[11] & 255)));
-                return true;
             }
             else
             {
                 intVFrames = -1;
+            }
+
+            if (HeaderType == "Xing")
+            {
+                //VBR Indeed
                 return true;
+            }
+            else
+            {
+                //Header is 'Info' which means CBR
+                return false;
             }
         }
         return false;
-    }
+    } */
 
     //Jeff
     public bool IsVBR()
     {
-        return this.bVBR;
+        return vbrFrameInfo.bVBR;
     }
 
     private int getBitrate() 
     {
         // If the file has a variable bitrate, then we return an integer average bitrate,
         // otherwise, we use a lookup table to return the bitrate
-        if(bVBR)
+        if(IsVBR())
         {
             //double medFrameSize = (double)lngFileSize / (double)getNumberOfFrames();
             double medFrameSize = (double)getAudioFileSize() / (double)getNumberOfFrames();
@@ -653,7 +860,7 @@ public class MP3
     private int getNumberOfFrames() 
     {
         // Again, the number of MPEG frames is dependant on whether it's a variable bitrate MP3 or not
-        if (!bVBR)
+        if (!IsVBR())
         {
             double medFrameSize = (double)(((firstFrame.LayerIndex == 3) ? 12 : 144) * ((1000.0 * (float)firstFrame.getBitrate()) / (float)firstFrame.getFrequency()));
             return (int)(getAudioFileSize() / medFrameSize);
