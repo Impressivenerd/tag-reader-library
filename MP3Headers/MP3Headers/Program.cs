@@ -16,6 +16,7 @@ namespace MP3Headers
             MP3 mp3_cbr = new MP3("Sample CBR.mp3");
             MP3 mp3_vbr = new MP3("Sample VBR.mp3");
             MP3 lyrics3 = new MP3("Sample Lyrics3v2.mp3");
+            MP3 lyrics3v1 = new MP3("Lyrics3v1 Test.mp3");
 
             Console.Write("MP3Headers Demo\n\n");
 
@@ -38,6 +39,9 @@ namespace MP3Headers
             Console.WriteLine();
 
             Console.WriteLine(lyrics3.ToString());
+            Console.WriteLine();
+
+            Console.WriteLine(lyrics3v1.ToString());
 
             Console.Write("\nPress any key to continue...");
             Console.ReadKey();
