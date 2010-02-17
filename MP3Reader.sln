@@ -3,6 +3,8 @@ Microsoft Visual Studio Solution File, Format Version 9.00
 # Visual Studio 2005
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MP3Reader", "MP3Reader\MP3Reader.csproj", "{B9A45126-90E7-4439-91B2-FA5C17C63C86}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MP3ReaderTest", "..\MP3ReaderTest\MP3ReaderTest\MP3ReaderTest.csproj", "{BB280842-FA57-4307-A1E2-718E9DF585B8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -13,6 +15,10 @@ Global
 		{B9A45126-90E7-4439-91B2-FA5C17C63C86}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B9A45126-90E7-4439-91B2-FA5C17C63C86}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B9A45126-90E7-4439-91B2-FA5C17C63C86}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BB280842-FA57-4307-A1E2-718E9DF585B8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BB280842-FA57-4307-A1E2-718E9DF585B8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BB280842-FA57-4307-A1E2-718E9DF585B8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BB280842-FA57-4307-A1E2-718E9DF585B8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
