@@ -19,6 +19,7 @@ namespace digitalBrink.MP3Reader.Tags
         public int MinorVersion = 0;
         public long Position = 0;
         public bool Exists = false;
+        public bool Valid = true;
 
         /// <summary>
         /// Is this tag enabled? (used in MP3 Write() method)

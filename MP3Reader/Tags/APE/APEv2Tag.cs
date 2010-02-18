@@ -10,8 +10,6 @@ namespace digitalBrink.MP3Reader.Tags.APE
 {
     public class APEv2Tag : Tag
     {
-        public bool Valid;
-
         /// <summary>
         /// Tag exists AFTER the audio data.
         /// </summary>

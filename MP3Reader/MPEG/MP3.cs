@@ -147,40 +147,44 @@ namespace digitalBrink.MP3Reader.MPEG
                 }
             }
 
-            //Search Backwards (Max Search 16384)
-            int intPosPrev = intPos;
-            int maxPos = intPos - 16384;
-            if (maxPos < 0) maxPos = 0;
-            do
+            //ID3v2 Tag was not valid, so the reported size may not be the actual size. Search backwards to try and find the first mpeg audio frame.
+            if (!id3v2.Valid)
             {
-                fs.Position = intPos;
-                fs.Read(bytHeader, 0, 4);
-
-                firstFrame = new MPEGAudioFrame(bytHeader, intPos);
-                if (firstFrame.Valid)
+                //Search Backwards (Max Search 16384)
+                int intPosPrev = intPos;
+                int maxPos = intPos - 16384;
+                if (maxPos < 0) maxPos = 0;
+                do
                 {
-                    nextFrame = intPos + firstFrame.FrameSize;
-                    fs.Position = nextFrame;
-                    bytHeader = new byte[4]; //Reset bytHeader array
+                    fs.Position = intPos;
                     fs.Read(bytHeader, 0, 4);
-                    MPEGAudioFrame SecondHeader = new MPEGAudioFrame(bytHeader, nextFrame);
-                    if (SecondHeader.Valid)
+
+                    firstFrame = new MPEGAudioFrame(bytHeader, intPos);
+                    if (firstFrame.Valid)
                     {
-                        Valid = true;
-                        break;
+                        nextFrame = intPos + firstFrame.FrameSize;
+                        fs.Position = nextFrame;
+                        bytHeader = new byte[4]; //Reset bytHeader array
+                        fs.Read(bytHeader, 0, 4);
+                        MPEGAudioFrame SecondHeader = new MPEGAudioFrame(bytHeader, nextFrame);
+                        if (SecondHeader.Valid)
+                        {
+                            Valid = true;
+                            break;
+                        }
+                        else
+                        {
+                            //The next frame did not appear valid - reset stream position
+                            fs.Position = intPos;
+                        }
                     }
-                    else
-                    {
-                        //The next frame did not appear valid - reset stream position
-                        fs.Position = intPos;
-                    }
-                }
 
-                intPos--;
+                    intPos--;
 
-            } while (!Valid && (fs.Position >= maxPos) && intPos >= 0);
+                } while (!Valid && (fs.Position >= maxPos) && intPos >= 0);
 
-            if (!Valid) intPos = intPosPrev;
+                if (!Valid) intPos = intPosPrev;
+            }
 
             //Search Forwards
             do
@@ -357,50 +361,6 @@ namespace digitalBrink.MP3Reader.MPEG
             }*/
         }
 
-        /*private bool LoadVBRHeader(byte[] inputheader)
-        {
-            // If it's a variable bitrate MP3, the first 4 bytes will read 'Xing'
-            // since they're the ones who added variable bitrate-edness to MP3s
-            string HeaderType = Encoding.ASCII.GetString(inputheader, 0, 4);
-            if(HeaderType == "Xing" || HeaderType == "Info") //(char)inputheader[0] == 'X' && (char)inputheader[1] == 'i' && (char)inputheader[2] == 'n' && (char)inputheader[3] == 'g')
-            {
-                int flags = (int)ID3.expand(inputheader[4], inputheader[5], inputheader[6], inputheader[7]);//(int)(((inputheader[4] & 255) << 24) | ((inputheader[5] & 255) << 16) | ((inputheader[6] & 255) <<  8) | ((inputheader[7] & 255)));
-            
-            
-                //Flags:
-                //Frames
-                //Bytes
-                //TOC
-            
-                bool framesFlag = ((flags & 0x01) == 0x01);     // total bit stream frames from Xing header data
-                bool bytesFlag = ((flags & 0x02) == 0x02);      // total bit stream bytes from Xing header data
-                bool tocFlag = ((flags & 0x04) == 0x04);
-                bool vbrScaleFlag = ((flags & 0x08) == 0x08);   // encoded vbr scale from Xing header data
-            
-                if(framesFlag)
-                {
-                    intVFrames = (int)ID3.expand(inputheader[8], inputheader[9], inputheader[10], inputheader[11]);//(int)(((inputheader[8] & 255) << 24) | ((inputheader[9] & 255) << 16) | ((inputheader[10] & 255) <<  8) | ((inputheader[11] & 255)));
-                }
-                else
-                {
-                    intVFrames = -1;
-                }
-
-                if (HeaderType == "Xing")
-                {
-                    //VBR Indeed
-                    return true;
-                }
-                else
-                {
-                    //Header is 'Info' which means CBR
-                    return false;
-                }
-            }
-            return false;
-        } */
-
-        //Jeff
         public bool IsVBR()
         {
             return vbrFrameInfo.bVBR;

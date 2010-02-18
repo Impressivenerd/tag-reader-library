@@ -7,8 +7,6 @@ namespace digitalBrink.MP3Reader.Tags.Lyrics3
 {
     public class Lyrics3Tag : Tag
     {
-        public bool Valid;
-
         public Lyrics3Tag(FileStream fs, bool ID3v1Exists)
         {
             Valid = false;

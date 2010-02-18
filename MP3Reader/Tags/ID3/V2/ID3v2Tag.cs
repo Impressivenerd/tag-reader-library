@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.IO;
 using System.Drawing;
+using System.Text.RegularExpressions;
 
 namespace digitalBrink.MP3Reader.Tags.ID3.V2
 {
@@ -30,6 +31,7 @@ namespace digitalBrink.MP3Reader.Tags.ID3.V2
         private void setDefaultValues()
         {
             Exists = false;
+            Valid = true;
             TagSize = 0;
 
             MajorVersion = 0;
@@ -83,6 +85,8 @@ namespace digitalBrink.MP3Reader.Tags.ID3.V2
             long fsOriginalPosition = fs.Position;
 
             setDefaultValues();
+
+            Regex ProperFrameNamePattern = new Regex("[A-Z0-9]");
 
             byte[] bytHeaderID3 = new byte[10];
             fs.Position = lngStartOffset;
@@ -173,6 +177,13 @@ namespace digitalBrink.MP3Reader.Tags.ID3.V2
                                     ((char)TempHeader[1]).ToString() +
                                     ((char)TempHeader[2]).ToString();
 
+                                if (!ProperFrameNamePattern.IsMatch(FrameHeaderName))
+                                {
+                                    Console.WriteLine("Invalid ID3v2 Header");
+                                    Valid = false;
+                                    break;
+                                }
+
                                 if (Frames.ContainsKey(FrameHeaderName))
                                 {
                                     Frames[FrameHeaderName].Add(new ID3v2Frame(FrameHeaderName, MajorVersion));
@@ -222,6 +233,13 @@ namespace digitalBrink.MP3Reader.Tags.ID3.V2
                                     ((char)TempHeader[1]).ToString() +
                                     ((char)TempHeader[2]).ToString() +
                                     ((char)TempHeader[3]).ToString();
+
+                                if (!ProperFrameNamePattern.IsMatch(FrameHeaderName))
+                                {
+                                    Console.WriteLine("Invalid ID3v2 Header");
+                                    Valid = false;
+                                    break;
+                                }
 
                                 if (Frames.ContainsKey(FrameHeaderName))
                                 {
