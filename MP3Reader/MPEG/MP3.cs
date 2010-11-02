@@ -537,7 +537,7 @@ namespace digitalBrink.MP3Reader.MPEG
                     "Frequency: " + this.intFrequency.ToString() + "\n" +
                     "Bitrate: " + this.intBitRate.ToString() + "\n" +
                     "Is this VBR Encoded? : " + this.IsVBR().ToString() + "\n" +
-                    "Length of the Song: " + (this.intLength / 60) + ":" + (this.intLength % 60) + "\n" +
+                    String.Format("Length of the Song: {0}:{1:D2}\n", (this.intLength / 60), (this.intLength % 60)) +
                     "Length of the Song (Formatted): " + this.strLengthFormatted + "\n" +
                     String.Format("Size of the MP3: {0:##.00} MB [{1}]", (this.lngFileSize / 1024.0 / 1024.0), this.lngFileSize) + "\n" +
                     String.Format("Size of the MP3 w/o tags: {0:##.00} MB [{1}]", (this.getAudioFileSize() / 1024.0 / 1024.0), this.getAudioFileSize()) + "\n" +
