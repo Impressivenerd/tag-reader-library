@@ -178,7 +178,7 @@ namespace TagTest
 
         private void helpToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            MessageBox.Show(this, "TagReader Sample Project\n\nVisit http://www.digitalBrink.com for more information.", "About TagReader Sample Project", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "TagReader Sample Project\n\nVisit https://github.com/ImpressiveNerd/tag-reader-library for more information.", "About TagReader Sample Project", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 }
